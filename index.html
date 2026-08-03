@@ -1479,27 +1479,19 @@ function renderDashboard(){
   var root = h('<div class="stack g40"></div>');
   viewResult.appendChild(root);
 
-  root.appendChild(secSubmissions(codes, agg));
-
-  if(nSub === 0){
-    root.appendChild(h('<div class="notice notice-warn">' +
-      (R.fetched === "loading"
-        ? 'サーバーから回答を取得しています…'
-        : 'まだ回答が1件もありません。' +
-          (syncOn() ? '誰かが回答を送信すると、ここに自動で表示されます。'
-                    : '上の欄に回答コードを貼り付けて読み込んでください。')) +
-      '</div>'));
+  /* 5人そろうまでは何も集計しない。
+     途中経過が見えると、まだ回答していない人がそれを見て順位を変えられる。 */
+  if(nSub < PEOPLE.length){
+    root.appendChild(secWaiting(agg, nSub));
+    root.appendChild(secSubmissions(codes, agg));
     root.appendChild(secAdmin());
     bindSubmissions();
     bindAdmin();
     return;
   }
 
-  if(nSub < PEOPLE.length){
-    root.appendChild(h('<div class="notice notice-warn"><b>' + nSub + ' / 5人</b>分の回答で集計しています。' +
-      '全員分そろうと結果が変わります。点数は「評価者1人あたりの平均pt（0〜4）」なので、人数が違っても比較できます。</div>'));
-  }
-
+  /* 5人そろったので、ここからは全部見せる */
+  root.appendChild(secSubmissions(codes, agg));
   root.appendChild(secOverall(agg));
   root.appendChild(secRadars(agg));
   root.appendChild(secCompare(agg));
@@ -1512,6 +1504,38 @@ function renderDashboard(){
   bindCompare(agg);
   bindAdmin();
 }
+
+/* --- 全員そろうまでのロック画面 ------------------------------------- */
+function secWaiting(agg, nSub){
+  var missing = [];
+  PEOPLE.forEach(function(n, i){ if(agg.submitted.indexOf(i) < 0) missing.push(n); });
+  var loading = R.fetched === "loading";
+
+  return h(
+    '<section class="stack g16">' +
+      '<div class="card pad hero">' +
+        '<div class="stack g8">' +
+          '<span class="eyebrow">Locked</span>' +
+          '<span class="hero-fig">' + nSub +
+            '<span style="font-size:26px;font-weight:700;color:var(--ink-muted)"> / 5</span></span>' +
+          '<span class="small muted">提出済み</span>' +
+        '</div>' +
+        '<div class="stack g12">' +
+          '<h2 style="font-size:20px">5人そろうまで結果は表示されません</h2>' +
+          '<p class="sec-note">途中経過が見えると、まだ回答していない人がそれに合わせて順位を変えられてしまいます。' +
+          '全員の回答が届くまで、集計もランキングも出しません。</p>' +
+          '<div class="progress"><i style="width:' + (nSub / PEOPLE.length * 100) + '%"></i></div>' +
+          (loading
+            ? '<p class="small muted">サーバーから取得中…</p>'
+            : (missing.length
+                ? '<p class="small dim">未提出：<b>' + esc(missing.join("、")) + '</b></p>'
+                : "")) +
+        '</div>' +
+      '</div>' +
+    '</section>'
+  );
+}
+
 
 /* --- 8.1 submissions ------------------------------------------------ */
 function secSubmissions(codes, agg){
