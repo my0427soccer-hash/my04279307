@@ -474,7 +474,17 @@ var NQ = QUESTIONS.length;     // 60
 var PTS = [4, 2, 1, 0];        // 1位→4pt, 2位→2pt, 3位→1pt, 4位→0pt
 var BASELINE = 1.75;           // (4+2+1+0)/4 — 完全にランダムに並べた場合の期待値
 var MAXPT = 4;
-var PASSWORD = "My04279307";
+var PASSWORD = "My04279307";   // 結果画面のパスワード
+
+/* ============================================================
+   自動集計の設定
+   ------------------------------------------------------------
+   Google Apps Script のウェブアプリURLをここに貼ると、回答が
+   自動で共有され、コードの受け渡しが不要になります。
+   空のままでも動きます（その場合は回答コードを手渡しする方式）。
+   設定手順は README.md を見てください。
+   ============================================================ */
+var SYNC_URL = "";
 
 /* ============================================================
    2. Share code — 60 questions packed into 66 characters
@@ -549,7 +559,8 @@ function targets(e){
    3. Storage
    ============================================================ */
 
-var K_DRAFT = "pr1.draft.";     // + evaluator index
+var K_DRAFT = "pr1.draft.";     // + evaluator index — 本人のパスワードで暗号化して保存
+var K_AUTH  = "pr1.auth.";      // + evaluator index — パスワードの照合用ハッシュ
 var K_CODES = "pr1.codes";      // { evaluatorIndex: code }
 var K_UNLOCK = "pr1.unlocked";
 
@@ -562,6 +573,171 @@ function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
 
 function getCodes(){ var c = lsGet(K_CODES, {}); return (c && typeof c === "object") ? c : {}; }
 function saveCode(e, code){ var c = getCodes(); c[e] = code; lsSet(K_CODES, c); }
+
+/* ============================================================
+   3b. SHA-256（依存なしの実装）
+   ------------------------------------------------------------
+   crypto.subtle は file:// で使えないため、どの開き方でも同じ
+   結果になるよう自前で持っています。
+   ============================================================ */
+
+var SHA_K = [
+0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+
+function rotr(x, n){ return (x >>> n) | (x << (32 - n)); }
+
+function utf8Bytes(str){
+  var bytes = [], i, c;
+  for(i=0;i<str.length;i++){
+    c = str.charCodeAt(i);
+    if(c < 0x80){ bytes.push(c); }
+    else if(c < 0x800){ bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63)); }
+    else if(c < 0xd800 || c >= 0xe000){ bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)); }
+    else {
+      i++;
+      var cp = 0x10000 + (((c & 0x3ff) << 10) | (str.charCodeAt(i) & 0x3ff));
+      bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
+    }
+  }
+  return bytes;
+}
+
+function sha256(str){
+  var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  var bytes = utf8Bytes(str);
+  var bitLen = bytes.length * 8;
+  bytes.push(0x80);
+  while(bytes.length % 64 !== 56) bytes.push(0);
+  bytes.push(0, 0, 0, 0, (bitLen >>> 24) & 255, (bitLen >>> 16) & 255, (bitLen >>> 8) & 255, bitLen & 255);
+
+  var w = new Array(64), off, t, i;
+  for(off=0; off<bytes.length; off+=64){
+    for(t=0;t<16;t++){
+      w[t] = (bytes[off+t*4] << 24) | (bytes[off+t*4+1] << 16) | (bytes[off+t*4+2] << 8) | bytes[off+t*4+3];
+    }
+    for(t=16;t<64;t++){
+      var s0 = rotr(w[t-15],7) ^ rotr(w[t-15],18) ^ (w[t-15] >>> 3);
+      var s1 = rotr(w[t-2],17) ^ rotr(w[t-2],19) ^ (w[t-2] >>> 10);
+      w[t] = (w[t-16] + s0 + w[t-7] + s1) | 0;
+    }
+    var a=H[0], b=H[1], c=H[2], d=H[3], e=H[4], f=H[5], g=H[6], hh=H[7];
+    for(t=0;t<64;t++){
+      var S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
+      var ch = (e & f) ^ (~e & g);
+      var t1 = (hh + S1 + ch + SHA_K[t] + w[t]) | 0;
+      var S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
+      var maj = (a & b) ^ (a & c) ^ (b & c);
+      var t2 = (S0 + maj) | 0;
+      hh=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0;
+    }
+    H[0]=(H[0]+a)|0; H[1]=(H[1]+b)|0; H[2]=(H[2]+c)|0; H[3]=(H[3]+d)|0;
+    H[4]=(H[4]+e)|0; H[5]=(H[5]+f)|0; H[6]=(H[6]+g)|0; H[7]=(H[7]+hh)|0;
+  }
+  var hex = "";
+  for(i=0;i<8;i++){ hex += ("00000000" + (H[i] >>> 0).toString(16)).slice(-8); }
+  return hex;
+}
+
+/* パスワード → 照合用ハッシュ。総当たりを少し重くするため繰り返す */
+function deriveAuth(person, pw){
+  var h = sha256("pr1|auth|" + person + "|" + pw);
+  for(var i=0;i<3000;i++){ h = sha256(h + "|pr1"); }
+  return h;
+}
+/* 下書き暗号化用の鍵（照合用ハッシュとは別系統にする） */
+function deriveKey(person, pw){
+  var h = sha256("pr1|key|" + person + "|" + pw);
+  for(var i=0;i<3000;i++){ h = sha256(h + "|key"); }
+  return h;
+}
+/* 結果取得用のトークン（結果パスワードを知っている人だけがデータを引ける） */
+function resultToken(){ return sha256("pr1|read|" + PASSWORD); }
+
+function keystream(seedHex, n){
+  var out = [], block = seedHex;
+  while(out.length < n){
+    block = sha256(block + "|ks");
+    for(var i=0;i<64 && out.length<n;i+=2){ out.push(parseInt(block.substr(i,2), 16)); }
+  }
+  return out;
+}
+var DRAFT_TAG = "PR1DRAFT:";
+function encryptStr(plain, keyHex){
+  var bytes = utf8Bytes(DRAFT_TAG + plain);
+  var ks = keystream(keyHex, bytes.length), chars = "";
+  for(var i=0;i<bytes.length;i++){ chars += String.fromCharCode(bytes[i] ^ ks[i]); }
+  return btoa(chars);
+}
+function decryptStr(b64, keyHex){
+  try{
+    var chars = atob(b64);
+    var ks = keystream(keyHex, chars.length), bytes = [];
+    for(var i=0;i<chars.length;i++){ bytes.push(chars.charCodeAt(i) ^ ks[i]); }
+    var s = decodeURIComponent(bytes.map(function(b){
+      return "%" + ("0" + b.toString(16)).slice(-2);
+    }).join(""));
+    if(s.indexOf(DRAFT_TAG) !== 0) return null;   // 鍵が違う
+    return s.slice(DRAFT_TAG.length);
+  }catch(e){ return null; }
+}
+
+/* ============================================================
+   3c. 自動集計（Google Apps Script）
+   ------------------------------------------------------------
+   Content-Type を text/plain にしているのは、プリフライト
+   （OPTIONS）を発生させないためです。Apps Script は OPTIONS に
+   応答できないので、これを外すと必ず CORS エラーになります。
+   ============================================================ */
+
+var syncOn = function(){ return !!SYNC_URL; };
+
+function syncCall(payload){
+  if(!SYNC_URL) return Promise.reject(new Error("not_configured"));
+  return fetch(SYNC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+    redirect: "follow"
+  }).then(function(res){
+    if(!res.ok) throw new Error("http_" + res.status);
+    return res.json();
+  }).then(function(data){
+    if(!data || data.ok !== true) throw new Error((data && data.error) || "server_error");
+    return data;
+  });
+}
+function syncSubmit(person, code, auth){
+  return syncCall({ action:"submit", person:person, code:code, auth:auth });
+}
+function syncStatus(){
+  return syncCall({ action:"status" });                       // 誰が提出済みかだけ（中身は返さない）
+}
+function syncCheck(person, auth){
+  return syncCall({ action:"check", person:person, auth:auth });
+}
+function syncList(){
+  return syncCall({ action:"list", key:resultToken() });
+}
+function syncReset(person){
+  return syncCall({ action:"reset", person:person, key:resultToken() });
+}
+
+function syncErrorText(err){
+  var m = String((err && err.message) || err);
+  if(m === "auth_mismatch") return "パスワードが一致しません。この名前はすでに別のパスワードで登録されています。";
+  if(m === "bad_key")       return "結果パスワードがサーバー側の設定と一致しません。";
+  if(m === "bad_code")      return "回答データの形式がサーバーに拒否されました。";
+  if(m === "not_configured")return "自動集計が設定されていません。";
+  if(m.indexOf("http_") === 0) return "サーバーがエラーを返しました（" + m.slice(5) + "）。";
+  return "サーバーに接続できませんでした。通信環境を確認してください。";
+}
 
 /* ============================================================
    4. Scoring
@@ -759,23 +935,37 @@ window.addEventListener("scroll", hideTip, true);
    7. Answer view
    ============================================================ */
 
-var A = { screen:"pick", evaluator:null, order:[], cat:0 };
+var A = { screen:"pick", evaluator:null, order:[], cat:0, key:null, auth:null, remote:null };
 
-function loadDraft(e){
-  var d = lsGet(K_DRAFT + e, null);
-  var order = new Array(NQ).fill(null);
-  if(d && Array.isArray(d.order)){
-    for(var q=0;q<NQ;q++){
-      var v = d.order[q];
-      if(Array.isArray(v) && v.every(function(x){ return x >= 0 && x < 4; })) order[q] = v.slice();
+function blankOrder(){ return new Array(NQ).fill(null); }
+
+/* 下書きは本人のパスワードで暗号化して保存する。
+   鍵が違えば復号に失敗するので、他の人が名前を選んでも中身は読めない。 */
+function loadDraft(e, keyHex){
+  var rec = lsGet(K_DRAFT + e, null);
+  if(!rec || !rec.enc) return blankOrder();
+  var json = decryptStr(rec.enc, keyHex);
+  if(json == null) return null;                     // 鍵が違う
+  var order = blankOrder();
+  try{
+    var arr = JSON.parse(json);
+    if(Array.isArray(arr)){
+      for(var q=0;q<NQ;q++){
+        var v = arr[q];
+        if(Array.isArray(v) && v.length === 4 && v.every(function(x){ return x >= 0 && x < 4; })){
+          order[q] = v.slice();
+        }
+      }
     }
-  }
+  }catch(err){ return null; }
   return order;
 }
 function saveDraft(){
-  if(A.evaluator == null) return;
-  lsSet(K_DRAFT + A.evaluator, { order:A.order, at:Date.now() });
+  if(A.evaluator == null || !A.key) return;
+  lsSet(K_DRAFT + A.evaluator, { enc: encryptStr(JSON.stringify(A.order), A.key), at: Date.now() });
 }
+function hasDraft(e){ var r = lsGet(K_DRAFT + e, null); return !!(r && r.enc); }
+function storedAuth(e){ return lsGet(K_AUTH + e, null); }
 function answeredCount(){
   return A.order.filter(function(o){ return o && o.length === 4; }).length;
 }
@@ -791,21 +981,30 @@ function renderAnswer(){
   if(A.screen === "done")  return renderDone();
 }
 
+/* 誰が提出済みか。サーバーが使えるときはサーバーの状態を優先する */
+function submittedSet(){
+  if(A.remote && A.remote.submitted) return A.remote.submitted;
+  return Object.keys(getCodes()).map(Number);
+}
+
 function renderPick(){
-  var codes = getCodes();
-  var doneList = Object.keys(codes).map(Number);
+  var done = submittedSet();
 
   var whoHtml = PEOPLE.map(function(name, i){
-    var done = codes[i] != null;
-    var draft = lsGet(K_DRAFT + i, null);
-    var n = 0;
-    if(draft && Array.isArray(draft.order)) n = draft.order.filter(function(o){ return o && o.length === 4; }).length;
-    var state = done ? "提出済み" : (n > 0 ? "途中 " + n + "/" + NQ : "未回答");
-    return '<button class="who" data-who="' + i + '" data-done="' + (done ? 1 : 0) + '">' +
+    var isDone = done.indexOf(i) >= 0;
+    var known = storedAuth(i) != null;
+    var state = isDone ? "提出済み" : (hasDraft(i) ? "回答の途中" : (known ? "パスワード設定済み" : "未回答"));
+    return '<button class="who" data-who="' + i + '" data-done="' + (isDone ? 1 : 0) + '">' +
              '<span class="who-name">' + esc(name) + '</span>' +
              '<span class="who-state">' + state + '</span>' +
            '</button>';
   }).join("");
+
+  var syncNote = syncOn()
+    ? (A.remote
+        ? '<div class="rule-k">Sync</div><div class="rule-v">回答すると自動で集計に反映<br><b>' + done.length + ' / 5人</b> が提出済み</div>'
+        : '<div class="rule-k">Sync</div><div class="rule-v">回答すると自動で集計に反映<br><span class="muted">提出状況を確認中…</span></div>')
+    : '<div class="rule-k">Result</div><div class="rule-v">回答後に出るコードを<br>集計担当に送ります</div>';
 
   viewAnswer.innerHTML = "";
   viewAnswer.appendChild(h(
@@ -814,48 +1013,162 @@ function renderPick(){
         '<div class="eyebrow">他人評価 · Peer review</div>' +
         '<h1 style="font-size:32px;letter-spacing:-.025em">5人でお互いを採点して、<br>10角形のレーダーにする</h1>' +
         '<p class="hero-lede">自分以外の4人を、質問ごとに1位から4位まで並べます。全60問。' +
-        '回答は他の人に見えません。集計結果はパスワードを知っている人だけが開けます。</p>' +
+        '自分で決めたパスワードで守られるので、並べた順番を他の人に見られることはありません。</p>' +
       '</section>' +
 
       '<section class="rulebox">' +
         '<div><div class="rule-k">Scoring</div><div class="rule-v">1位 <b>4pt</b> ／ 2位 <b>2pt</b><br>3位 <b>1pt</b> ／ 4位 <b>0pt</b></div></div>' +
         '<div><div class="rule-k">Questions</div><div class="rule-v">10カテゴリ × 6問<br>合計 <b>60問</b></div></div>' +
-        '<div><div class="rule-k">Privacy</div><div class="rule-v">回答中も回答後も<br>他人の点数は表示されません</div></div>' +
-        '<div><div class="rule-k">Result</div><div class="rule-v">全員の回答コードを<br>集めてから集計します</div></div>' +
+        '<div><div class="rule-k">Privacy</div><div class="rule-v">回答は自分の<br>パスワードで暗号化</div></div>' +
+        '<div>' + syncNote + '</div>' +
       '</section>' +
 
       '<section class="stack g12">' +
         '<div class="sec-head"><h2>あなたは誰ですか？</h2>' +
-        '<p class="sec-note">選んだ人として回答します。途中でやめても、この端末に自動保存されます。</p></div>' +
+        '<p class="sec-note">名前を選ぶとパスワードを聞かれます。初回は自分で決めてください。' +
+        '2回目からは同じものを入れると続きから再開できます。</p></div>' +
         '<div class="who-grid">' + whoHtml + '</div>' +
+        '<div id="gate"></div>' +
       '</section>' +
-
-      (doneList.length
-        ? '<p class="small muted">この端末で提出済み：' +
-            doneList.map(function(i){ return esc(PEOPLE[i]); }).join("、") +
-          '（' + doneList.length + '/5人）</p>'
-        : "") +
     '</div>'
   ));
 
   Array.prototype.forEach.call(viewAnswer.querySelectorAll("[data-who]"), function(b){
     b.addEventListener("click", function(){
-      var i = +b.getAttribute("data-who");
-      if(getCodes()[i] != null){
-        if(!confirm(PEOPLE[i] + " さんはすでに提出済みです。\n最初からやり直しますか？（前の回答は上書きされます）")) return;
-        var c = getCodes(); delete c[i]; lsSet(K_CODES, c);
-        lsDel(K_DRAFT + i);
-      }
-      A.evaluator = i;
-      A.order = loadDraft(i);
-      A.cat = 0;
-      /* 最初の未回答カテゴリから始める */
-      for(var ci=0; ci<CATS.length; ci++){ if(!catComplete(ci)){ A.cat = ci; break; } }
-      A.screen = "quiz";
-      renderAnswer();
-      window.scrollTo(0, 0);
+      renderGate(+b.getAttribute("data-who"));
     });
   });
+
+  /* サーバーが設定されていれば提出状況を取りに行く（失敗しても回答はできる） */
+  if(syncOn() && !A.remote){
+    syncStatus().then(function(d){
+      A.remote = { submitted: (d.submitted || []).map(Number) };
+      if(A.screen === "pick") renderPick();
+    }).catch(function(){
+      A.remote = { submitted: Object.keys(getCodes()).map(Number), offline:true };
+      if(A.screen === "pick") renderPick();
+    });
+  }
+}
+
+/* --- パスワードの入口 ------------------------------------------------ */
+function renderGate(person){
+  var box = document.getElementById("gate");
+  if(!box) return;
+  var isNew = storedAuth(person) == null && !hasDraft(person) &&
+              submittedSet().indexOf(person) < 0;
+  var alreadyDone = submittedSet().indexOf(person) >= 0;
+
+  box.innerHTML = "";
+  box.appendChild(h(
+    '<form class="card pad stack g12" id="gateform" style="max-width:460px">' +
+      '<div class="row g8" style="justify-content:space-between">' +
+        '<span class="eyebrow">' + esc(PEOPLE[person]) + ' さん</span>' +
+        '<button class="btn btn-ghost btn-sm" type="button" id="gate-cancel">閉じる</button>' +
+      '</div>' +
+      (isNew
+        ? '<p class="small dim">この名前で使うパスワードを決めてください。' +
+          '回答の続きを開くときと、回答を送るときに必要になります。</p>'
+        : '<p class="small dim">' + (alreadyDone
+            ? '提出済みです。やり直す場合は設定したパスワードを入れてください。'
+            : '前回設定したパスワードを入れてください。') + '</p>') +
+      '<input class="field" type="password" id="gpw" autocomplete="off" placeholder="パスワード">' +
+      (isNew ? '<input class="field" type="password" id="gpw2" autocomplete="off" placeholder="確認のためもう一度">' : "") +
+      '<div class="row g8 wrap">' +
+        '<button class="btn btn-primary" type="submit" id="gate-go">' +
+          (isNew ? "このパスワードで始める" : (alreadyDone ? "やり直す" : "続きから再開する")) +
+        '</button>' +
+      '</div>' +
+      '<p class="xsmall" id="gmsg"></p>' +
+    '</form>'
+  ));
+  var pw = document.getElementById("gpw");
+  pw.focus();
+  document.getElementById("gate-cancel").addEventListener("click", function(){ box.innerHTML = ""; });
+  document.getElementById("gateform").addEventListener("submit", function(ev){
+    ev.preventDefault();
+    submitGate(person, isNew, alreadyDone);
+  });
+}
+
+function gateMsg(text, bad){
+  var m = document.getElementById("gmsg");
+  if(!m) return;
+  m.textContent = text || "";
+  m.style.color = bad ? "var(--crit)" : "var(--ink-muted)";
+}
+
+function submitGate(person, isNew, alreadyDone){
+  var pw = document.getElementById("gpw").value;
+  var btn = document.getElementById("gate-go");
+  if(pw.length < 4){ gateMsg("パスワードは4文字以上にしてください。", true); return; }
+  if(isNew){
+    var pw2 = document.getElementById("gpw2").value;
+    if(pw !== pw2){ gateMsg("2つのパスワードが一致しません。", true); return; }
+  }
+  btn.disabled = true;
+  gateMsg("確認中…", false);
+
+  /* ハッシュ計算は少し重いので、画面を描き変えてから走らせる */
+  setTimeout(function(){
+    var auth = deriveAuth(person, pw);
+    var key  = deriveKey(person, pw);
+    var known = storedAuth(person);
+
+    if(known != null && known !== auth){
+      btn.disabled = false;
+      gateMsg("パスワードが違います。", true);
+      return;
+    }
+
+    function proceed(){
+      var order = blankOrder();
+      if(hasDraft(person)){
+        var loaded = loadDraft(person, key);
+        if(loaded == null){
+          btn.disabled = false;
+          gateMsg("パスワードが違います。", true);
+          return;
+        }
+        order = loaded;
+      }
+      if(alreadyDone){
+        if(!confirm(PEOPLE[person] + " さんは提出済みです。\n最初から回答し直しますか？（前の回答は上書きされます）")){
+          btn.disabled = false; gateMsg("", false); return;
+        }
+        var c = getCodes(); delete c[person]; lsSet(K_CODES, c);
+        lsDel(K_DRAFT + person);
+        order = blankOrder();
+        if(A.remote && A.remote.submitted){
+          A.remote.submitted = A.remote.submitted.filter(function(x){ return x !== person; });
+        }
+      }
+      lsSet(K_AUTH + person, auth);
+      A.evaluator = person; A.key = key; A.auth = auth;
+      A.order = order; A.cat = 0;
+      for(var ci=0; ci<CATS.length; ci++){ if(!catComplete(ci)){ A.cat = ci; break; } }
+      A.screen = "quiz";
+      saveDraft();
+      renderAnswer();
+      window.scrollTo(0, 0);
+    }
+
+    /* 別の端末で登録済みかもしれないので、サーバーにも確認する */
+    if(known == null && syncOn()){
+      syncCheck(person, auth).then(function(d){
+        if(d.exists && !d.match){
+          btn.disabled = false;
+          gateMsg("この名前は別のパスワードで登録済みです。本人が設定したものを入れてください。", true);
+          return;
+        }
+        proceed();
+      }).catch(function(){
+        proceed();   /* サーバーに繋がらなくても回答はできる */
+      });
+    }else{
+      proceed();
+    }
+  }, 30);
 }
 
 function renderQuiz(){
@@ -984,13 +1297,29 @@ function renderQuiz(){
       }
     }
   });
-  function submit(){
+  function submit(ev){
     if(answeredCount() !== NQ) return;
     var code = encodeCode(A.evaluator, A.order);
-    saveCode(A.evaluator, code);
-    lsDel(K_DRAFT + A.evaluator);
-    A.screen = "done"; A.code = code;
-    renderAnswer(); window.scrollTo(0, 0);
+    var btn = ev && ev.currentTarget;
+
+    function finish(sent, errText){
+      saveCode(A.evaluator, code);
+      lsDel(K_DRAFT + A.evaluator);
+      if(A.remote && A.remote.submitted && A.remote.submitted.indexOf(A.evaluator) < 0){
+        A.remote.submitted.push(A.evaluator);
+      }
+      A.screen = "done"; A.code = code; A.sent = sent; A.sendError = errText || null;
+      renderAnswer(); window.scrollTo(0, 0);
+    }
+
+    if(syncOn()){
+      if(btn){ btn.disabled = true; btn.textContent = "送信中…"; }
+      syncSubmit(A.evaluator, code, A.auth)
+        .then(function(){ finish(true); })
+        .catch(function(err){ finish(false, syncErrorText(err)); });
+    }else{
+      finish(false);
+    }
   }
   if((el = document.getElementById("btn-submit"))) el.addEventListener("click", submit);
   if((el = document.getElementById("btn-finish"))) el.addEventListener("click", submit);
@@ -998,36 +1327,66 @@ function renderQuiz(){
 
 function renderDone(){
   var code = A.code;
-  var n = Object.keys(getCodes()).length;
+  var sent = A.sent;
+  var showCode = !sent;      /* 送信できたならコードを見せる必要はない */
+  var n = submittedSet().length;
+
   viewAnswer.innerHTML = "";
   viewAnswer.appendChild(h(
     '<div class="stack g24">' +
       '<section class="stack g12">' +
         '<div class="eyebrow">Submitted</div>' +
         '<h1 style="font-size:28px">' + esc(PEOPLE[A.evaluator]) + ' さんの回答を受け付けました</h1>' +
-        '<p class="hero-lede">下の回答コードを集計担当の人に送ってください。' +
-        'この端末で集計する場合は送らなくて大丈夫です（すでに保存されています）。</p>' +
+        '<p class="hero-lede">' +
+          (sent
+            ? '集計に反映されました。もう何もしなくて大丈夫です。'
+            : (syncOn()
+                ? 'ただし自動送信には失敗しました。下のコードを集計担当に送ってください。'
+                : '下の回答コードを集計担当の人に送ってください。この端末で集計する場合は送らなくて大丈夫です。')) +
+        '</p>' +
       '</section>' +
-      '<div class="card pad stack g12">' +
-        '<div class="row g8" style="justify-content:space-between">' +
-          '<span class="eyebrow">回答コード</span>' +
-          '<button class="btn btn-sm" id="btn-copy">コピー</button>' +
-        '</div>' +
-        '<div class="codebox" id="codebox">' + esc(groupCode(code)) + '</div>' +
-        '<p class="xsmall muted">スペースは読みやすさのためのものです。含めても含めなくても読み込めます。</p>' +
-      '</div>' +
-      '<div class="notice">この端末には <b>' + n + ' / 5人</b> 分の回答が集まっています。' +
-      '全員分そろったら「結果を見る」からパスワードを入れて集計してください。</div>' +
+
+      (sent
+        ? '<div class="notice"><b>' + n + ' / 5人</b> が提出済みです。' +
+          '全員そろったら、集計担当が「結果を見る」から結果を開けます。</div>'
+        : "") +
+
+      (A.sendError ? '<div class="notice notice-crit">' + esc(A.sendError) + '</div>' : "") +
+
+      (showCode
+        ? '<div class="card pad stack g12">' +
+            '<div class="row g8" style="justify-content:space-between">' +
+              '<span class="eyebrow">回答コード</span>' +
+              '<button class="btn btn-sm" id="btn-copy">コピー</button>' +
+            '</div>' +
+            '<div class="codebox" id="codebox">' + esc(groupCode(code)) + '</div>' +
+            '<p class="xsmall muted">スペースは読みやすさのためのものです。含めても含めなくても読み込めます。</p>' +
+          '</div>'
+        : "") +
+
+      (!sent && syncOn()
+        ? '<div class="row g8 wrap"><button class="btn btn-primary" id="btn-retry">もう一度送信する</button></div>'
+        : "") +
+
       '<div class="row g8 wrap">' +
         '<button class="btn btn-ghost" id="btn-back">最初の画面に戻る</button>' +
       '</div>' +
     '</div>'
   ));
-  document.getElementById("btn-copy").addEventListener("click", function(){
-    copyText(code, this);
+
+  var el;
+  if((el = document.getElementById("btn-copy"))) el.addEventListener("click", function(){ copyText(code, this); });
+  if((el = document.getElementById("btn-retry"))) el.addEventListener("click", function(){
+    var b = this; b.disabled = true; b.textContent = "送信中…";
+    syncSubmit(A.evaluator, code, A.auth).then(function(){
+      A.sent = true; A.sendError = null; renderAnswer(); window.scrollTo(0,0);
+    }).catch(function(err){
+      A.sendError = syncErrorText(err); renderAnswer();
+    });
   });
   document.getElementById("btn-back").addEventListener("click", function(){
-    A.screen = "pick"; A.evaluator = null; renderAnswer(); window.scrollTo(0,0);
+    A.screen = "pick"; A.evaluator = null; A.key = null; A.auth = null;
+    renderAnswer(); window.scrollTo(0,0);
   });
 }
 
@@ -1054,7 +1413,7 @@ function copyText(text, btn){
    8. Result view
    ============================================================ */
 
-var R = { unlocked:false, compare:[0,1,2] };
+var R = { unlocked:false, compare:[0,1,2], fetched:null };
 
 function renderResult(){
   hideTip();
@@ -1099,6 +1458,23 @@ function renderDashboard(){
   var agg = aggregate(codes);
   var nSub = agg.submitted.length;
 
+  /* サーバーが設定されていれば、開いた時点で取りに行く */
+  if(syncOn() && !R.fetched){
+    R.fetched = "loading";
+    syncList().then(function(d){
+      var got = 0;
+      (d.rows || []).forEach(function(row){
+        var dec = decodeCode(row.code);
+        if(!dec.error){ saveCode(dec.evaluator, dec.code); got++; }
+      });
+      R.fetched = { ok:true, got:got, at:new Date() };
+      renderDashboard();
+    }).catch(function(err){
+      R.fetched = { ok:false, error:syncErrorText(err) };
+      renderDashboard();
+    });
+  }
+
   viewResult.innerHTML = "";
   var root = h('<div class="stack g40"></div>');
   viewResult.appendChild(root);
@@ -1106,8 +1482,16 @@ function renderDashboard(){
   root.appendChild(secSubmissions(codes, agg));
 
   if(nSub === 0){
-    root.appendChild(h('<div class="notice notice-warn">まだ回答が1件もありません。上の欄に回答コードを貼り付けて読み込んでください。</div>'));
+    root.appendChild(h('<div class="notice notice-warn">' +
+      (R.fetched === "loading"
+        ? 'サーバーから回答を取得しています…'
+        : 'まだ回答が1件もありません。' +
+          (syncOn() ? '誰かが回答を送信すると、ここに自動で表示されます。'
+                    : '上の欄に回答コードを貼り付けて読み込んでください。')) +
+      '</div>'));
+    root.appendChild(secAdmin());
     bindSubmissions();
+    bindAdmin();
     return;
   }
 
@@ -1137,22 +1521,45 @@ function secSubmissions(codes, agg){
            esc(name) + ' ' + (ok ? "提出済み" : "未提出") + '</span>';
   }).join("");
 
+  var syncBlock = "";
+  if(syncOn()){
+    var f = R.fetched;
+    var statusHtml =
+      (f === "loading" || !f) ? '<span class="muted">サーバーから取得中…</span>'
+      : (f.ok ? '<span class="pill pill-done"><span class="dot"></span>自動取得 ' + f.got + '件 · ' +
+                f.at.toLocaleTimeString("ja-JP") + '</span>'
+              : '<span class="pill pill-crit"><span class="dot"></span>取得できませんでした</span>');
+    syncBlock =
+      '<div class="card pad stack g12">' +
+        '<div class="row wrap g8" style="justify-content:space-between">' +
+          '<span class="eyebrow">自動集計</span>' + statusHtml +
+        '</div>' +
+        '<p class="small dim">回答は送信された時点でここに集まります。コードのやりとりは不要です。</p>' +
+        (f && !f.ok ? '<div class="notice notice-crit">' + esc(f.error) + '</div>' : "") +
+        '<div class="row g8 wrap"><button class="btn btn-sm" id="btn-refetch">最新を取得しなおす</button></div>' +
+      '</div>';
+  }
+
   return h(
     '<section class="stack g12">' +
       '<div class="sec-head">' +
         '<div><div class="eyebrow">Step 1</div><h2>回答を集める</h2></div>' +
-        '<p class="sec-note">各自の回答コードを貼り付けます。改行で区切れば何件でもまとめて読み込めます。</p>' +
+        '<p class="sec-note">' + (syncOn()
+          ? '回答は自動で集まります。下の手入力はサーバーが使えないときの予備です。'
+          : '各自の回答コードを貼り付けます。改行で区切れば何件でもまとめて読み込めます。') + '</p>' +
       '</div>' +
       '<div class="row wrap g8">' + chips + '</div>' +
-      '<div class="card pad stack g12">' +
-        '<textarea class="field" id="codein" placeholder="PR1 0ABCDEFGHJ ... のような66文字のコードを貼り付け（複数行可）"></textarea>' +
-        '<div class="row wrap g8">' +
-          '<button class="btn btn-primary btn-sm" id="btn-load">読み込む</button>' +
-          '<button class="btn btn-ghost btn-sm" id="btn-showcodes">保存済みコードを表示</button>' +
-        '</div>' +
-        '<div id="loadmsg"></div>' +
-        '<div id="codelist" class="hidden"></div>' +
-      '</div>' +
+      syncBlock +
+      '<details class="qgroup"' + (syncOn() ? "" : " open") + '>' +
+        '<summary>回答コードを手で読み込む</summary>' +
+        '<div class="qgroup-body"><div class="stack g12">' +
+          '<textarea class="field" id="codein" placeholder="PR1 0ABCDEFGHJ ... のような66文字のコードを貼り付け（複数行可）"></textarea>' +
+          '<div class="row wrap g8">' +
+            '<button class="btn btn-primary btn-sm" id="btn-load">読み込む</button>' +
+          '</div>' +
+          '<div id="loadmsg"></div>' +
+        '</div></div>' +
+      '</details>' +
     '</section>'
   );
 }
@@ -1178,20 +1585,9 @@ function bindSubmissions(){
     if(okList.length){ setTimeout(function(){ renderDashboard(); window.scrollTo(0,0); }, 700); }
   });
 
-  var sb = document.getElementById("btn-showcodes");
-  if(sb) sb.addEventListener("click", function(){
-    var box = document.getElementById("codelist");
-    if(!box.classList.contains("hidden")){ box.classList.add("hidden"); this.textContent = "保存済みコードを表示"; return; }
-    var codes = getCodes();
-    var keys = Object.keys(codes).map(Number).sort(function(a,b){ return a-b; });
-    box.innerHTML = keys.length
-      ? '<div class="stack g8">' + keys.map(function(i){
-          return '<div class="stack g8"><span class="eyebrow">' + esc(PEOPLE[i]) + '</span>' +
-                 '<div class="codebox xsmall">' + esc(groupCode(codes[i])) + '</div></div>';
-        }).join("") + '</div>'
-      : '<p class="small muted">この端末に保存されたコードはありません。</p>';
-    box.classList.remove("hidden");
-    this.textContent = "保存済みコードを隠す";
+  var rf = document.getElementById("btn-refetch");
+  if(rf) rf.addEventListener("click", function(){
+    R.fetched = null; renderDashboard(); window.scrollTo(0, 0);
   });
 
   function msg(html){ var m = document.getElementById("loadmsg"); if(m) m.innerHTML = html; }
@@ -1466,14 +1862,29 @@ function secRawTable(agg){
 
 /* --- 8.8 admin ------------------------------------------------------ */
 function secAdmin(){
+  var resetRow = syncOn()
+    ? '<div class="stack g8">' +
+        '<span class="eyebrow">パスワードを忘れた人がいるとき</span>' +
+        '<p class="small dim">その人の登録を消すと、本人が新しいパスワードで回答をやり直せます。' +
+        '提出済みの回答も消えます。</p>' +
+        '<div class="row g8 wrap">' +
+          PEOPLE.map(function(n, i){
+            return '<button class="btn btn-ghost btn-sm" data-reset="' + i + '">' + esc(n) + 'をリセット</button>';
+          }).join("") +
+        '</div>' +
+        '<p class="xsmall" id="resetmsg"></p>' +
+      '</div><hr class="hr">'
+    : "";
+
   return h(
     '<section class="stack g12 no-print">' +
-      '<div class="sec-head"><div><div class="eyebrow">Admin</div><h2>この端末のデータ</h2></div></div>' +
+      '<div class="sec-head"><div><div class="eyebrow">Admin</div><h2>管理</h2></div></div>' +
       '<div class="card pad stack g12">' +
-        '<p class="small dim">回答の下書きと回答コードは、この端末のブラウザにだけ保存されています。' +
-        '別の端末には共有されません。消すと元に戻せません。</p>' +
+        resetRow +
+        '<p class="small dim">この端末に残っている下書きと回答コードを消します。' +
+        (syncOn() ? 'サーバー側のデータは消えません。' : '消すと元に戻せません。') + '</p>' +
         '<div class="row g8 wrap">' +
-          '<button class="btn btn-ghost btn-sm" id="btn-wipe">保存データをすべて消去</button>' +
+          '<button class="btn btn-ghost btn-sm" id="btn-wipe">この端末の保存データを消去</button>' +
           '<button class="btn btn-ghost btn-sm" id="btn-lock">結果をロックする</button>' +
         '</div>' +
       '</div>' +
@@ -1484,15 +1895,34 @@ function secAdmin(){
 function bindAdmin(){
   var w = document.getElementById("btn-wipe");
   if(w) w.addEventListener("click", function(){
-    if(!confirm("この端末に保存された回答コードと下書きをすべて消去します。よろしいですか？")) return;
+    if(!confirm("この端末に保存された回答コード・下書き・パスワード設定を消去します。よろしいですか？")) return;
     lsDel(K_CODES);
-    for(var i=0;i<PEOPLE.length;i++) lsDel(K_DRAFT + i);
+    for(var i=0;i<PEOPLE.length;i++){ lsDel(K_DRAFT + i); lsDel(K_AUTH + i); }
+    R.fetched = null; A.remote = null;
     renderDashboard(); renderAnswer(); window.scrollTo(0,0);
   });
   var l = document.getElementById("btn-lock");
   if(l) l.addEventListener("click", function(){
     try{ sessionStorage.removeItem(K_UNLOCK); }catch(e){}
     R.unlocked = false; renderResult(); window.scrollTo(0,0);
+  });
+  Array.prototype.forEach.call(viewResult.querySelectorAll("[data-reset]"), function(b){
+    b.addEventListener("click", function(){
+      var i = +b.getAttribute("data-reset");
+      if(!confirm(PEOPLE[i] + " さんの登録と提出済みの回答を消します。よろしいですか？")) return;
+      var m = document.getElementById("resetmsg");
+      b.disabled = true;
+      syncReset(i).then(function(){
+        var c = getCodes(); delete c[i]; lsSet(K_CODES, c);
+        lsDel(K_DRAFT + i); lsDel(K_AUTH + i);
+        A.remote = null; R.fetched = null;
+        if(m){ m.textContent = PEOPLE[i] + " さんをリセットしました。"; m.style.color = "var(--good)"; }
+        setTimeout(function(){ renderDashboard(); window.scrollTo(0,0); }, 800);
+      }).catch(function(err){
+        b.disabled = false;
+        if(m){ m.textContent = syncErrorText(err); m.style.color = "var(--crit)"; }
+      });
+    });
   });
 }
 
