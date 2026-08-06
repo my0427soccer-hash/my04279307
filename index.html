@@ -424,7 +424,7 @@ details.qgroup > summary:hover{background:var(--surface-2)}
       </svg>
       <div>
         <div class="brand-name">相互評価レーダー</div>
-        <div class="brand-sub">5 members · 60 questions</div>
+        <div class="brand-sub" id="brand-sub">60 questions</div>
       </div>
     </div>
     <div class="tabs" role="tablist">
@@ -446,10 +446,8 @@ details.qgroup > summary:hover{background:var(--surface-2)}
 "use strict";
 
 /* ============================================================
-   1. Data model
+   1. Questions — the only fixed part of the survey
    ============================================================ */
-
-var PEOPLE = ["山下","服部","大矢","福井","内田"];
 
 var CATS = [
   { name:"能力・知性",       short:"知性",     qs:["一番賢い人","一番頭の回転が速い人","一番勉強ができる人","一番発想力がある人","一番地頭がいい人","一番要領がいい人"] },
@@ -464,121 +462,74 @@ var CATS = [
   { name:"その他",           short:"その他",   qs:["一番運がいい人","一番人生が充実している人","一番自由な人","一番努力家な人","一番好奇心旺盛な人","一番成長速度が速い人"] }
 ];
 
-var QUESTIONS = [];            // flat list of 60
+var QUESTIONS = [];
 CATS.forEach(function(c, ci){
   c.qs.forEach(function(q, qi){
     QUESTIONS.push({ text:q, cat:ci, idxInCat:qi, no:QUESTIONS.length });
   });
 });
-var NQ = QUESTIONS.length;     // 60
-var PTS = [4, 2, 1, 0];        // 1位→4pt, 2位→2pt, 3位→1pt, 4位→0pt
-var BASELINE = 1.75;           // (4+2+1+0)/4 — 完全にランダムに並べた場合の期待値
-var MAXPT = 4;
-var PASSWORD = "My04279307";   // 結果画面のパスワード
+var NQ = QUESTIONS.length;      // 60
+var PER_CAT = 6;
+
+var MIN_PEOPLE = 3;             // 2人だと順位に意味がない
+var MAX_PEOPLE = 12;            // これ以上は回答コードが長くなりすぎる
+var MAX_NAME = 12;
+
+var PASSWORD = "My04279307";    // 結果画面のパスワード
 
 /* ============================================================
    自動集計の設定
    ------------------------------------------------------------
-   Google Apps Script のウェブアプリURLをここに貼ると、回答が
-   自動で共有され、コードの受け渡しが不要になります。
-   空のままでも動きます（その場合は回答コードを手渡しする方式）。
-   設定手順は README.md を見てください。
+   Google Apps Script のウェブアプリURLをここに貼ると、参加者名簿と
+   回答が自動で共有され、コードの受け渡しが不要になります。
+   空のままでも動きます。設定手順は README.md を見てください。
    ============================================================ */
 var SYNC_URL = "";
 
 /* ============================================================
-   2. Share code — 60 questions packed into 66 characters
-   ------------------------------------------------------------
-   A ranking of 4 people is one of 24 permutations, so each
-   question fits in a single character. Layout:
-     "PR1" + evaluator digit + 60 answer chars + 2 checksum chars
+   2. Roster — 参加者と配点。ここから先はすべてこれに従う
    ============================================================ */
 
-var ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ";  // 24 chars, no I/O (0/1 confusion)
-var PREFIX = "PR1";
+var ROSTER = null;   // { names:[...], scale:"double"|"linear", id:"ABCD" }
 
-function permToIndex(perm){
-  var avail = [0,1,2,3], idx = 0;
-  for(var i=0;i<4;i++){
-    var p = avail.indexOf(perm[i]);
-    idx = idx * (4 - i) + p;
-    avail.splice(p, 1);
+function nPeople(){ return ROSTER ? ROSTER.names.length : 0; }
+function nRanked(){ return nPeople() - 1; }          // 自分以外の人数
+function personName(i){ return ROSTER.names[i]; }
+
+/* 配点。既定の「倍々」は、4人を並べるとき 4/2/1/0 になる方式 */
+function scaleFor(m, mode){
+  var pts = [], i;
+  if(mode === "linear"){
+    for(i=0;i<m;i++) pts.push(m - 1 - i);            // 3,2,1,0
+  }else{
+    for(i=0;i<m;i++) pts.push(i === m - 1 ? 0 : Math.pow(2, m - 2 - i));   // 4,2,1,0
   }
-  return idx;
+  return pts;
 }
-function indexToPerm(idx){
-  var avail = [0,1,2,3], digits = [], out = [], x = idx, i;
-  for(i=3;i>=0;i--){ var r = 4 - i; digits[i] = x % r; x = Math.floor(x / r); }
-  for(i=0;i<4;i++){ out.push(avail.splice(digits[i], 1)[0]); }
-  return out;
-}
-function checksum(s){
-  var h = 5381;
-  for(var i=0;i<s.length;i++){ h = (((h * 33) ^ s.charCodeAt(i)) >>> 0); }
-  var v = h % (24 * 24);
-  return ALPHA.charAt(Math.floor(v / 24)) + ALPHA.charAt(v % 24);
-}
-function encodeCode(evaluator, answers){
-  var body = "";
-  for(var q=0;q<NQ;q++){ body += ALPHA.charAt(permToIndex(answers[q])); }
-  var core = PREFIX + evaluator + body;
-  return core + checksum(core);
-}
-function groupCode(code){
-  return (code.match(/.{1,11}/g) || []).join(" ");
-}
-function decodeCode(raw){
-  var s = String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
-  if(!s) return { error:"空の入力です。" };
-  if(s.indexOf(PREFIX) !== 0) return { error:"形式が違います（PR1 で始まる必要があります）。" };
-  if(s.length !== PREFIX.length + 1 + NQ + 2){
-    return { error:"文字数が合いません（" + s.length + "文字／正しくは" + (PREFIX.length + 1 + NQ + 2) + "文字）。" };
-  }
-  var evaluator = parseInt(s.charAt(3), 10);
-  if(!(evaluator >= 0 && evaluator < PEOPLE.length)) return { error:"回答者の識別子が不正です。" };
-  var body = s.substring(4, 4 + NQ);
-  var core = s.substring(0, 4 + NQ);
-  if(checksum(core) !== s.substring(4 + NQ)) return { error:"チェックサムが一致しません。コピーミスの可能性があります。" };
-  var answers = [];
-  for(var q=0;q<NQ;q++){
-    var v = ALPHA.indexOf(body.charAt(q));
-    if(v < 0) return { error:"使用できない文字が含まれています。" };
-    answers.push(indexToPerm(v));
-  }
-  return { evaluator:evaluator, answers:answers, code:s };
+var PTS = [];        // 順位ごとの得点
+var PTS_SUM = 0;     // 評価者1人が1問で配る合計
+var MAXPT = 0;       // 1位の点
+var BASELINE = 0;    // 評価者1人あたりの平均点＝レーダーの基準
+
+function applyRoster(r){
+  ROSTER = r;
+  PTS = scaleFor(nRanked(), r.scale);
+  PTS_SUM = PTS.reduce(function(a,b){ return a + b; }, 0);
+  MAXPT = PTS[0];
+  BASELINE = PTS_SUM / nRanked();
+  var sub = document.getElementById("brand-sub");
+  if(sub) sub.textContent = nPeople() + " members · " + NQ + " questions";
 }
 
-/* targets(e) — the 4 people that evaluator e ranks, in fixed order */
+/* 評価者 e が順位をつける相手（自分以外を番号順に） */
 function targets(e){
   var t = [];
-  for(var i=0;i<PEOPLE.length;i++){ if(i !== e) t.push(i); }
+  for(var i=0;i<nPeople();i++){ if(i !== e) t.push(i); }
   return t;
 }
 
 /* ============================================================
-   3. Storage
-   ============================================================ */
-
-var K_DRAFT = "pr1.draft.";     // + evaluator index — 本人のパスワードで暗号化して保存
-var K_AUTH  = "pr1.auth.";      // + evaluator index — パスワードの照合用ハッシュ
-var K_CODES = "pr1.codes";      // { evaluatorIndex: code }
-var K_UNLOCK = "pr1.unlocked";
-
-function lsGet(k, fallback){
-  try{ var v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); }
-  catch(e){ return fallback; }
-}
-function lsSet(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
-function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
-
-function getCodes(){ var c = lsGet(K_CODES, {}); return (c && typeof c === "object") ? c : {}; }
-function saveCode(e, code){ var c = getCodes(); c[e] = code; lsSet(K_CODES, c); }
-
-/* ============================================================
-   3b. SHA-256（依存なしの実装）
-   ------------------------------------------------------------
-   crypto.subtle は file:// で使えないため、どの開き方でも同じ
-   結果になるよう自前で持っています。
+   3. SHA-256（依存なし。crypto.subtle は file:// で使えないため）
    ============================================================ */
 
 var SHA_K = [
@@ -607,6 +558,11 @@ function utf8Bytes(str){
     }
   }
   return bytes;
+}
+function bytesToStr(bytes){
+  return decodeURIComponent(bytes.map(function(b){
+    return "%" + ("0" + b.toString(16)).slice(-2);
+  }).join(""));
 }
 
 function sha256(str){
@@ -645,20 +601,17 @@ function sha256(str){
   return hex;
 }
 
-/* パスワード → 照合用ハッシュ。総当たりを少し重くするため繰り返す */
-function deriveAuth(person, pw){
-  var h = sha256("pr1|auth|" + person + "|" + pw);
-  for(var i=0;i<3000;i++){ h = sha256(h + "|pr1"); }
+function deriveAuth(rosterId, person, pw){
+  var h = sha256("pr2|auth|" + rosterId + "|" + person + "|" + pw);
+  for(var i=0;i<3000;i++){ h = sha256(h + "|pr2"); }
   return h;
 }
-/* 下書き暗号化用の鍵（照合用ハッシュとは別系統にする） */
-function deriveKey(person, pw){
-  var h = sha256("pr1|key|" + person + "|" + pw);
+function deriveKey(rosterId, person, pw){
+  var h = sha256("pr2|key|" + rosterId + "|" + person + "|" + pw);
   for(var i=0;i<3000;i++){ h = sha256(h + "|key"); }
   return h;
 }
-/* 結果取得用のトークン（結果パスワードを知っている人だけがデータを引ける） */
-function resultToken(){ return sha256("pr1|read|" + PASSWORD); }
+function resultToken(){ return sha256("pr2|read|" + PASSWORD); }
 
 function keystream(seedHex, n){
   var out = [], block = seedHex;
@@ -668,7 +621,7 @@ function keystream(seedHex, n){
   }
   return out;
 }
-var DRAFT_TAG = "PR1DRAFT:";
+var DRAFT_TAG = "PR2DRAFT:";
 function encryptStr(plain, keyHex){
   var bytes = utf8Bytes(DRAFT_TAG + plain);
   var ks = keystream(keyHex, bytes.length), chars = "";
@@ -680,23 +633,197 @@ function decryptStr(b64, keyHex){
     var chars = atob(b64);
     var ks = keystream(keyHex, chars.length), bytes = [];
     for(var i=0;i<chars.length;i++){ bytes.push(chars.charCodeAt(i) ^ ks[i]); }
-    var s = decodeURIComponent(bytes.map(function(b){
-      return "%" + ("0" + b.toString(16)).slice(-2);
-    }).join(""));
-    if(s.indexOf(DRAFT_TAG) !== 0) return null;   // 鍵が違う
+    var s = bytesToStr(bytes);
+    if(s.indexOf(DRAFT_TAG) !== 0) return null;
     return s.slice(DRAFT_TAG.length);
   }catch(e){ return null; }
 }
 
 /* ============================================================
-   3c. 自動集計（Google Apps Script）
+   4. 回答コード
    ------------------------------------------------------------
-   Content-Type を text/plain にしているのは、プリフライト
-   （OPTIONS）を発生させないためです。Apps Script は OPTIONS に
-   応答できないので、これを外すと必ず CORS エラーになります。
+   "PR2" + 名簿ID(4) + 回答者番号(2) + 本文 + チェックサム(2)
+   本文は1問ごとに、m人の並べ方 m! 通りを24進数で表したもの。
+   1問あたりの文字数は人数で変わります（4人なら1文字）。
    ============================================================ */
 
-var syncOn = function(){ return !!SYNC_URL; };
+var ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ";   // 24文字。I と O は 1/0 と紛らわしいので除外
+var PREFIX = "PR2";
+
+function factorial(n){ var r = 1; for(var i=2;i<=n;i++) r *= i; return r; }
+function charsPerQ(m){
+  var need = factorial(m), w = 1;
+  while(Math.pow(24, w) < need) w++;
+  return w;
+}
+function toBase24(n, width){
+  var s = "";
+  for(var i=0;i<width;i++){ s = ALPHA.charAt(n % 24) + s; n = Math.floor(n / 24); }
+  return s;
+}
+function fromBase24(s){
+  var n = 0;
+  for(var i=0;i<s.length;i++){
+    var v = ALPHA.indexOf(s.charAt(i));
+    if(v < 0) return -1;
+    n = n * 24 + v;
+  }
+  return n;
+}
+function permToIndex(perm, m){
+  var avail = [], idx = 0, i;
+  for(i=0;i<m;i++) avail.push(i);
+  for(i=0;i<m;i++){
+    var p = avail.indexOf(perm[i]);
+    if(p < 0) return -1;
+    idx = idx * (m - i) + p;
+    avail.splice(p, 1);
+  }
+  return idx;
+}
+function indexToPerm(idx, m){
+  var avail = [], digits = [], out = [], x = idx, i;
+  for(i=0;i<m;i++) avail.push(i);
+  for(i=m-1;i>=0;i--){ var r = m - i; digits[i] = x % r; x = Math.floor(x / r); }
+  for(i=0;i<m;i++) out.push(avail.splice(digits[i], 1)[0]);
+  return out;
+}
+function checksum(s){
+  var h = 5381;
+  for(var i=0;i<s.length;i++){ h = (((h * 33) ^ s.charCodeAt(i)) >>> 0); }
+  var v = h % (24 * 24);
+  return ALPHA.charAt(Math.floor(v / 24)) + ALPHA.charAt(v % 24);
+}
+function rosterFingerprint(names, scale){
+  var h = sha256("pr2|roster|" + scale + "|" + names.join(" "));
+  var out = "";
+  for(var i=0;i<4;i++){ out += ALPHA.charAt(parseInt(h.substr(i*2, 2), 16) % 24); }
+  return out;
+}
+function codeLength(m){ return PREFIX.length + 4 + 2 + NQ * charsPerQ(m) + 2; }
+
+function encodeCode(evaluator, answers){
+  var m = nRanked(), w = charsPerQ(m), body = "";
+  for(var q=0;q<NQ;q++){ body += toBase24(permToIndex(answers[q], m), w); }
+  var core = PREFIX + ROSTER.id + toBase24(evaluator, 2) + body;
+  return core + checksum(core);
+}
+function groupCode(code){ return (code.match(/.{1,11}/g) || []).join(" "); }
+
+function decodeCode(raw){
+  if(!ROSTER) return { error:"参加者が設定されていません。" };
+  var s = String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if(!s) return { error:"空の入力です。" };
+  if(s.indexOf(PREFIX) !== 0) return { error:"形式が違います（PR2 で始まる必要があります）。" };
+
+  var m = nRanked(), w = charsPerQ(m), want = codeLength(m);
+  if(s.length !== want){
+    return { error:"文字数が合いません（" + s.length + "文字／この人数なら" + want + "文字）。" +
+                   "参加者の設定が違う可能性があります。" };
+  }
+  var rid = s.substr(3, 4);
+  if(rid !== ROSTER.id){
+    return { error:"別の参加者設定で作られたコードです。名簿を合わせてください。" };
+  }
+  var evaluator = fromBase24(s.substr(7, 2));
+  if(!(evaluator >= 0 && evaluator < nPeople())) return { error:"回答者の識別子が不正です。" };
+
+  var body = s.substr(9, NQ * w);
+  var core = s.substring(0, 9 + NQ * w);
+  if(checksum(core) !== s.substring(9 + NQ * w)){
+    return { error:"チェックサムが一致しません。コピーミスの可能性があります。" };
+  }
+  var answers = [], limit = factorial(m);
+  for(var q=0;q<NQ;q++){
+    var v = fromBase24(body.substr(q * w, w));
+    if(v < 0 || v >= limit) return { error:"読み取れない文字が含まれています。" };
+    answers.push(indexToPerm(v, m));
+  }
+  return { evaluator:evaluator, answers:answers, code:s };
+}
+
+/* ============================================================
+   5. Storage — 名簿ごとに分けて保存する
+   ============================================================ */
+
+var K_ROSTER = "pr2.roster";
+var K_UNLOCK = "pr2.unlocked";
+function kDraft(e){ return "pr2." + ROSTER.id + ".draft." + e; }
+function kAuth(e){  return "pr2." + ROSTER.id + ".auth." + e; }
+function kCodes(){  return "pr2." + ROSTER.id + ".codes"; }
+
+function lsGet(k, fallback){
+  try{ var v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); }
+  catch(e){ return fallback; }
+}
+function lsSet(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
+
+function getCodes(){ var c = lsGet(kCodes(), {}); return (c && typeof c === "object") ? c : {}; }
+function saveCode(e, code){ var c = getCodes(); c[e] = code; lsSet(kCodes(), c); }
+
+/* ============================================================
+   6. 名簿の共有（URL・サーバー）
+   ============================================================ */
+
+function b64url(str){
+  var bytes = utf8Bytes(str), s = "";
+  for(var i=0;i<bytes.length;i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function unb64url(b64){
+  try{
+    var s = b64.replace(/-/g, "+").replace(/_/g, "/");
+    while(s.length % 4) s += "=";
+    var chars = atob(s), bytes = [];
+    for(var i=0;i<chars.length;i++) bytes.push(chars.charCodeAt(i));
+    return bytesToStr(bytes);
+  }catch(e){ return null; }
+}
+function makeRoster(names, scale){
+  return { names:names.slice(), scale:scale, id:rosterFingerprint(names, scale) };
+}
+function rosterLink(){
+  var payload = b64url(JSON.stringify({ n:ROSTER.names, s:ROSTER.scale }));
+  return location.href.split("#")[0] + "#r=" + payload;
+}
+function rosterFromHash(){
+  var m = /[#&]r=([A-Za-z0-9\-_]+)/.exec(location.hash || "");
+  if(!m) return null;
+  var json = unb64url(m[1]);
+  if(!json) return null;
+  try{
+    var o = JSON.parse(json);
+    var err = validateNames(o.n);
+    if(err) return null;
+    return makeRoster(o.n, o.s === "linear" ? "linear" : "double");
+  }catch(e){ return null; }
+}
+function validateNames(names){
+  if(!Array.isArray(names)) return "名前のリストが読めません。";
+  var clean = names.map(function(s){ return String(s == null ? "" : s).trim(); }).filter(Boolean);
+  if(clean.length !== names.length) return "空の行があります。";
+  if(clean.length < MIN_PEOPLE) return "参加者は" + MIN_PEOPLE + "人以上にしてください（今は" + clean.length + "人）。";
+  if(clean.length > MAX_PEOPLE) return "参加者は" + MAX_PEOPLE + "人までです（今は" + clean.length + "人）。";
+  for(var i=0;i<clean.length;i++){
+    if(clean[i].length > MAX_NAME) return "「" + clean[i].slice(0, MAX_NAME) + "…」が長すぎます（" + MAX_NAME + "文字まで）。";
+  }
+  var seen = {};
+  for(i=0;i<clean.length;i++){
+    if(seen[clean[i]]) return "「" + clean[i] + "」が重複しています。";
+    seen[clean[i]] = 1;
+  }
+  return null;
+}
+
+/* ============================================================
+   7. 自動集計（Google Apps Script）
+   ------------------------------------------------------------
+   Content-Type を text/plain にしているのは、プリフライト（OPTIONS）
+   を発生させないためです。Apps Script は OPTIONS に応答できません。
+   ============================================================ */
+
+function syncOn(){ return !!SYNC_URL; }
 
 function syncCall(payload){
   if(!SYNC_URL) return Promise.reject(new Error("not_configured"));
@@ -713,34 +840,37 @@ function syncCall(payload){
     return data;
   });
 }
+function syncGetRoster(){ return syncCall({ action:"getRoster" }); }
+function syncSetRoster(){
+  return syncCall({ action:"setRoster", key:resultToken(),
+                    names:ROSTER.names, scale:ROSTER.scale, rosterId:ROSTER.id });
+}
 function syncSubmit(person, code, auth){
-  return syncCall({ action:"submit", person:person, code:code, auth:auth });
+  return syncCall({ action:"submit", rosterId:ROSTER.id, person:person, code:code, auth:auth });
 }
-function syncStatus(){
-  return syncCall({ action:"status" });                       // 誰が提出済みかだけ（中身は返さない）
-}
+function syncStatus(){ return syncCall({ action:"status", rosterId:ROSTER.id }); }
 function syncCheck(person, auth){
-  return syncCall({ action:"check", person:person, auth:auth });
+  return syncCall({ action:"check", rosterId:ROSTER.id, person:person, auth:auth });
 }
-function syncList(){
-  return syncCall({ action:"list", key:resultToken() });
-}
+function syncList(){ return syncCall({ action:"list", rosterId:ROSTER.id, key:resultToken() }); }
 function syncReset(person){
-  return syncCall({ action:"reset", person:person, key:resultToken() });
+  return syncCall({ action:"reset", rosterId:ROSTER.id, person:person, key:resultToken() });
 }
 
 function syncErrorText(err){
   var m = String((err && err.message) || err);
-  if(m === "auth_mismatch") return "パスワードが一致しません。この名前はすでに別のパスワードで登録されています。";
-  if(m === "bad_key")       return "結果パスワードがサーバー側の設定と一致しません。";
-  if(m === "bad_code")      return "回答データの形式がサーバーに拒否されました。";
-  if(m === "not_configured")return "自動集計が設定されていません。";
+  if(m === "auth_mismatch")  return "パスワードが一致しません。この名前はすでに別のパスワードで登録されています。";
+  if(m === "bad_key")        return "結果パスワードがサーバー側の設定と一致しません。";
+  if(m === "bad_code")       return "回答データの形式がサーバーに拒否されました。";
+  if(m === "roster_mismatch")return "サーバー側の参加者設定と食い違っています。名簿を設定しなおしてください。";
+  if(m === "no_roster")      return "サーバーに参加者が登録されていません。";
+  if(m === "not_configured") return "自動集計が設定されていません。";
   if(m.indexOf("http_") === 0) return "サーバーがエラーを返しました（" + m.slice(5) + "）。";
   return "サーバーに接続できませんでした。通信環境を確認してください。";
 }
 
 /* ============================================================
-   4. Scoring
+   8. 集計
    ============================================================ */
 
 function aggregate(codes){
@@ -751,10 +881,8 @@ function aggregate(codes){
   });
   submitted.sort(function(a,b){ return a.evaluator - b.evaluator; });
 
-  var P = PEOPLE.length;
-  var raw = [];      // raw[p][q] = total points
-  var voters = [];   // voters[p] = how many people rated p
-  var p, q;
+  var P = nPeople(), m = nRanked();
+  var raw = [], voters = [], p, q;
   for(p=0;p<P;p++){ raw[p] = new Array(NQ).fill(0); voters[p] = 0; }
 
   submitted.forEach(function(sub){
@@ -762,13 +890,13 @@ function aggregate(codes){
     tg.forEach(function(person){ voters[person] += 1; });
     for(q=0;q<NQ;q++){
       var perm = sub.answers[q];
-      for(var rank=0; rank<4; rank++){
+      for(var rank=0; rank<m; rank++){
         raw[tg[perm[rank]]][q] += PTS[rank];
       }
     }
   });
 
-  /* avg[p][q] = points per voter, 0–4 — comparable even with partial submissions */
+  /* avg[p][q] = 評価者1人あたりの得点（0〜MAXPT） */
   var avg = [];
   for(p=0;p<P;p++){
     avg[p] = new Array(NQ).fill(0);
@@ -776,32 +904,27 @@ function aggregate(codes){
       for(q=0;q<NQ;q++){ avg[p][q] = raw[p][q] / voters[p]; }
     }
   }
-
-  /* category averages */
   var cat = [];
   for(p=0;p<P;p++){
     cat[p] = CATS.map(function(c, ci){
       var s = 0;
-      for(var i=0;i<c.qs.length;i++){ s += avg[p][ci * 6 + i]; }
-      return s / c.qs.length;
+      for(var i=0;i<PER_CAT;i++){ s += avg[p][ci * PER_CAT + i]; }
+      return s / PER_CAT;
     });
   }
-
-  /* overall */
   var overall = [];
   for(p=0;p<P;p++){
     var s = 0;
     for(q=0;q<NQ;q++){ s += avg[p][q]; }
     overall[p] = s / NQ;
   }
-
   return {
     submitted: submitted.map(function(s){ return s.evaluator; }),
     raw: raw, avg: avg, cat: cat, overall: overall, voters: voters
   };
 }
 
-/* competition ranking (1,2,2,4) over an array of numbers, higher = better */
+/* 同点は同順位（1,2,2,4 方式） */
 function rankOf(values){
   var order = values.map(function(v,i){ return {v:v, i:i}; })
                     .sort(function(a,b){ return b.v - a.v; });
@@ -815,7 +938,7 @@ function rankOf(values){
 }
 
 /* ============================================================
-   5. Small DOM helpers
+   9. DOM helpers
    ============================================================ */
 
 function h(html){ var t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
@@ -823,11 +946,24 @@ function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
 }); }
 function fmt(n, d){ return Number(n).toFixed(d === undefined ? 2 : d); }
+function ptText(n){
+  var s = Number(n).toFixed(2);
+  return s.replace(/\.00$/, "");
+}
 var viewAnswer = document.getElementById("view-answer");
 var viewResult = document.getElementById("view-result");
 
+/* 配点の説明文 */
+function scaleSummary(){
+  var m = nRanked();
+  if(m <= 4){
+    return PTS.map(function(p, i){ return (i + 1) + "位 <b>" + p + "pt</b>"; }).join(" ／ ");
+  }
+  return "1位 <b>" + PTS[0] + "pt</b> ／ 2位 <b>" + PTS[1] + "pt</b> … 最下位 <b>0pt</b>";
+}
+
 /* ============================================================
-   6. Radar chart (SVG)
+   10. レーダーチャート（SVG）
    ============================================================ */
 
 var SHAPES = ["circle","square","diamond"];
@@ -838,10 +974,6 @@ function markerPath(shape, x, y, s){
   return '<circle cx="'+x+'" cy="'+y+'" r="'+s+'"/>';
 }
 
-/*
-  series: [{ name, values:[10], color, shape }]
-  opts:   { w, h, r, labelR, font }
-*/
 function radarSVG(series, opts){
   var o = opts || {};
   var w = o.w || 280, hh = o.h || 250, R = o.r || 72;
@@ -862,24 +994,22 @@ function radarSVG(series, opts){
   }
 
   var s = '<svg class="radar-svg" viewBox="0 0 ' + w + ' ' + hh + '" role="img" aria-label="' +
-          esc(series.map(function(x){ return x.name; }).join("、")) + 'のカテゴリ別スコア（0〜4pt、10軸）">';
+          esc(series.map(function(x){ return x.name; }).join("、")) + 'のカテゴリ別スコア（10軸）">';
 
-  /* baseline zone — everything inside is "at or below average for this group".
-     Shaded rather than drawn as a line, so it never reads as one more gridline. */
+  /* 基準ゾーン。線ではなく面にすることで、目盛りと見分けがつく */
   s += '<polygon points="' + poly(BASELINE) + '" fill="var(--surface-3)" fill-opacity=".7" ' +
        'stroke="var(--axis)" stroke-width="1"/>';
-  /* rings — solid hairlines, one shade off the surface */
-  for(k=1;k<=MAXPT;k++){
-    s += '<polygon points="' + poly(k) + '" fill="none" stroke="var(--grid)" stroke-width="1"/>';
+
+  var rings = 4;
+  for(k=1;k<=rings;k++){
+    s += '<polygon points="' + poly(MAXPT * k / rings) + '" fill="none" stroke="var(--grid)" stroke-width="1"/>';
   }
-  /* spokes */
   for(i=0;i<n;i++){
     var e = pt(i, MAXPT);
     s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + e[0].toFixed(1) + '" y2="' + e[1].toFixed(1) +
          '" stroke="var(--grid)" stroke-width="1"/>';
   }
 
-  /* series */
   series.forEach(function(ser){
     var pts = [], j;
     for(j=0;j<n;j++){ pts.push(pt(j, ser.values[j])); }
@@ -888,7 +1018,6 @@ function radarSVG(series, opts){
          'stroke="' + ser.color + '" stroke-width="2" stroke-linejoin="round"/>';
     pts.forEach(function(p, j2){
       var tip = esc(ser.name) + " · " + esc(CATS[j2].short) + " " + fmt(ser.values[j2]) + "pt";
-      /* 2px surface ring on the marker, oversized transparent hit area for hover */
       s += '<g fill="' + ser.color + '" stroke="var(--surface)" stroke-width="2">' +
            markerPath(ser.shape || "circle", +p[0].toFixed(1), +p[1].toFixed(1), o.markerR || 4) +
            '</g>';
@@ -897,7 +1026,6 @@ function radarSVG(series, opts){
     });
   });
 
-  /* axis labels */
   for(i=0;i<n;i++){
     var a = (-90 + i * (360 / n)) * Math.PI / 180;
     var lx = cx + Math.cos(a) * labelR, ly = cy + Math.sin(a) * labelR;
@@ -907,12 +1035,10 @@ function radarSVG(series, opts){
          'font-size="' + (o.font || 10.5) + '" font-weight="600" fill="var(--ink-muted)" ' +
          'font-family="var(--font-ui)">' + esc(CATS[i].short) + '</text>';
   }
-
   s += '</svg>';
   return s;
 }
 
-/* tooltip */
 var tipEl = document.getElementById("tip");
 function showTip(target){
   var txt = target.getAttribute("data-tip");
@@ -932,27 +1058,25 @@ document.addEventListener("pointerleave", hideTip, true);
 window.addEventListener("scroll", hideTip, true);
 
 /* ============================================================
-   7. Answer view
+   11. 回答タブ
    ============================================================ */
 
 var A = { screen:"pick", evaluator:null, order:[], cat:0, key:null, auth:null, remote:null };
 
 function blankOrder(){ return new Array(NQ).fill(null); }
 
-/* 下書きは本人のパスワードで暗号化して保存する。
-   鍵が違えば復号に失敗するので、他の人が名前を選んでも中身は読めない。 */
 function loadDraft(e, keyHex){
-  var rec = lsGet(K_DRAFT + e, null);
+  var rec = lsGet(kDraft(e), null);
   if(!rec || !rec.enc) return blankOrder();
   var json = decryptStr(rec.enc, keyHex);
-  if(json == null) return null;                     // 鍵が違う
-  var order = blankOrder();
+  if(json == null) return null;
+  var order = blankOrder(), m = nRanked();
   try{
     var arr = JSON.parse(json);
     if(Array.isArray(arr)){
       for(var q=0;q<NQ;q++){
         var v = arr[q];
-        if(Array.isArray(v) && v.length === 4 && v.every(function(x){ return x >= 0 && x < 4; })){
+        if(Array.isArray(v) && v.length === m && v.every(function(x){ return x >= 0 && x < m; })){
           order[q] = v.slice();
         }
       }
@@ -962,35 +1086,172 @@ function loadDraft(e, keyHex){
 }
 function saveDraft(){
   if(A.evaluator == null || !A.key) return;
-  lsSet(K_DRAFT + A.evaluator, { enc: encryptStr(JSON.stringify(A.order), A.key), at: Date.now() });
+  lsSet(kDraft(A.evaluator), { enc: encryptStr(JSON.stringify(A.order), A.key), at: Date.now() });
 }
-function hasDraft(e){ var r = lsGet(K_DRAFT + e, null); return !!(r && r.enc); }
-function storedAuth(e){ return lsGet(K_AUTH + e, null); }
+function hasDraft(e){ var r = lsGet(kDraft(e), null); return !!(r && r.enc); }
+function storedAuth(e){ return lsGet(kAuth(e), null); }
+
 function answeredCount(){
-  return A.order.filter(function(o){ return o && o.length === 4; }).length;
+  var m = nRanked();
+  return A.order.filter(function(o){ return o && o.length === m; }).length;
 }
 function catComplete(ci){
-  for(var i=0;i<6;i++){ var o = A.order[ci * 6 + i]; if(!(o && o.length === 4)) return false; }
+  var m = nRanked();
+  for(var i=0;i<PER_CAT;i++){
+    var o = A.order[ci * PER_CAT + i];
+    if(!(o && o.length === m)) return false;
+  }
   return true;
 }
-
-function renderAnswer(){
-  hideTip();
-  if(A.screen === "pick")  return renderPick();
-  if(A.screen === "quiz")  return renderQuiz();
-  if(A.screen === "done")  return renderDone();
-}
-
-/* 誰が提出済みか。サーバーが使えるときはサーバーの状態を優先する */
 function submittedSet(){
   if(A.remote && A.remote.submitted) return A.remote.submitted;
   return Object.keys(getCodes()).map(Number);
 }
 
+function renderAnswer(){
+  hideTip();
+  if(!ROSTER) return renderSetup(false);
+  if(A.screen === "pick") return renderPick();
+  if(A.screen === "quiz") return renderQuiz();
+  if(A.screen === "done") return renderDone();
+}
+
+/* --- 11a. 参加者の設定 ------------------------------------------------ */
+
+function renderSetup(isEdit){
+  var pre = ROSTER ? ROSTER.names.join("\n") : "";
+  var scale = ROSTER ? ROSTER.scale : "double";
+
+  viewAnswer.innerHTML = "";
+  viewAnswer.appendChild(h(
+    '<div class="stack g32">' +
+      '<section class="stack g16">' +
+        '<div class="eyebrow">Setup</div>' +
+        '<h1 style="font-size:32px;letter-spacing:-.025em">参加者を決める</h1>' +
+        '<p class="hero-lede">名前を1行に1人ずつ入れてください。' + MIN_PEOPLE + '人から' + MAX_PEOPLE + '人まで。' +
+        '全員が、自分以外の人を順位づけします。</p>' +
+      '</section>' +
+
+      '<div class="card pad stack g16" style="max-width:560px">' +
+        '<div class="stack g8">' +
+          '<label class="eyebrow" for="names">参加者の名前</label>' +
+          '<textarea class="field" id="names" rows="7" spellcheck="false" ' +
+            'placeholder="山下&#10;服部&#10;大矢&#10;福井&#10;内田">' + esc(pre) + '</textarea>' +
+        '</div>' +
+        '<div class="stack g8">' +
+          '<span class="eyebrow">配点</span>' +
+          '<div class="pick-row">' +
+            '<button class="pick" type="button" data-scale="double" aria-pressed="' + (scale === "double") + '"' +
+              (scale === "double" ? ' style="color:var(--accent)"' : "") + '>倍々（4人なら 4/2/1/0）</button>' +
+            '<button class="pick" type="button" data-scale="linear" aria-pressed="' + (scale === "linear") + '"' +
+              (scale === "linear" ? ' style="color:var(--accent)"' : "") + '>等差（4人なら 3/2/1/0）</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="preview" class="notice"></div>' +
+        '<div class="row g8 wrap">' +
+          '<button class="btn btn-primary" id="setup-go">この設定で始める</button>' +
+          (isEdit ? '<button class="btn btn-ghost" id="setup-cancel">やめる</button>' : "") +
+        '</div>' +
+        '<p class="xsmall" id="setupmsg"></p>' +
+      '</div>' +
+
+      (isEdit
+        ? '<div class="notice notice-warn">参加者や配点を変えると、いまの回答はすべて無効になります' +
+          '（回答コードの形式が変わるためです）。全員に回答し直してもらう必要があります。</div>'
+        : "") +
+    '</div>'
+  ));
+
+  var pending = scale;
+  var ta = document.getElementById("names");
+
+  function names(){
+    return ta.value.split(/\r?\n/).map(function(s){ return s.trim(); }).filter(function(s, i, a){
+      return s.length > 0 || false;
+    });
+  }
+  function refresh(){
+    var list = names();
+    var box = document.getElementById("preview");
+    var err = validateNames(list);
+    if(err){
+      box.className = "notice notice-warn";
+      box.innerHTML = esc(err);
+      return;
+    }
+    var m = list.length - 1;
+    var pts = scaleFor(m, pending);
+    var sum = pts.reduce(function(a,b){ return a + b; }, 0);
+    box.className = "notice";
+    box.innerHTML =
+      '<b>' + list.length + '人</b>で実施します。各自が自分以外の <b>' + m + '人</b> を順位づけします。<br>' +
+      '配点：' + pts.map(function(p, i){ return (i + 1) + "位 " + p + "pt"; }).join(" ／ ") + '<br>' +
+      '1問あたり配られる合計 <b>' + (sum * list.length) + 'pt</b>' +
+      '（' + sum + 'pt × ' + list.length + '人）・1人が取れる最大 <b>' + (pts[0] * m) + 'pt</b><br>' +
+      '<span class="muted">回答コードは ' + codeLength(m) + ' 文字になります。</span>';
+  }
+  ta.addEventListener("input", refresh);
+  Array.prototype.forEach.call(viewAnswer.querySelectorAll("[data-scale]"), function(b){
+    b.addEventListener("click", function(){
+      pending = b.getAttribute("data-scale");
+      Array.prototype.forEach.call(viewAnswer.querySelectorAll("[data-scale]"), function(x){
+        var on = x.getAttribute("data-scale") === pending;
+        x.setAttribute("aria-pressed", String(on));
+        x.style.color = on ? "var(--accent)" : "";
+      });
+      refresh();
+    });
+  });
+  refresh();
+
+  var cancel = document.getElementById("setup-cancel");
+  if(cancel) cancel.addEventListener("click", function(){
+    A.screen = "pick"; renderAnswer(); window.scrollTo(0, 0);
+  });
+
+  document.getElementById("setup-go").addEventListener("click", function(){
+    var list = names();
+    var err = validateNames(list);
+    var msg = document.getElementById("setupmsg");
+    if(err){ msg.textContent = err; msg.style.color = "var(--crit)"; return; }
+
+    var next = makeRoster(list, pending);
+    if(ROSTER && next.id === ROSTER.id){
+      A.screen = "pick"; renderAnswer(); window.scrollTo(0, 0); return;
+    }
+    var btn = this;
+    btn.disabled = true;
+    msg.style.color = "var(--ink-muted)";
+    msg.textContent = "設定しています…";
+
+    applyRoster(next);
+    lsSet(K_ROSTER, next);
+    A = { screen:"pick", evaluator:null, order:[], cat:0, key:null, auth:null, remote:null };
+    R.fetched = null;
+
+    function done(){
+      renderAnswer();
+      if(R.unlocked) renderResult();
+      window.scrollTo(0, 0);
+    }
+    if(syncOn()){
+      syncSetRoster().then(done).catch(function(e){
+        done();
+        alert("参加者はこの端末に設定しましたが、サーバーへの登録に失敗しました。\n" + syncErrorText(e));
+      });
+    }else{
+      done();
+    }
+  });
+}
+
+/* --- 11b. 名前を選ぶ -------------------------------------------------- */
+
 function renderPick(){
   var done = submittedSet();
+  var N = nPeople(), m = nRanked();
 
-  var whoHtml = PEOPLE.map(function(name, i){
+  var whoHtml = ROSTER.names.map(function(name, i){
     var isDone = done.indexOf(i) >= 0;
     var known = storedAuth(i) != null;
     var state = isDone ? "提出済み" : (hasDraft(i) ? "回答の途中" : (known ? "パスワード設定済み" : "未回答"));
@@ -1002,7 +1263,7 @@ function renderPick(){
 
   var syncNote = syncOn()
     ? (A.remote
-        ? '<div class="rule-k">Sync</div><div class="rule-v">回答すると自動で集計に反映<br><b>' + done.length + ' / 5人</b> が提出済み</div>'
+        ? '<div class="rule-k">Sync</div><div class="rule-v">回答すると自動で集計に反映<br><b>' + done.length + ' / ' + N + '人</b> が提出済み</div>'
         : '<div class="rule-k">Sync</div><div class="rule-v">回答すると自動で集計に反映<br><span class="muted">提出状況を確認中…</span></div>')
     : '<div class="rule-k">Result</div><div class="rule-v">回答後に出るコードを<br>集計担当に送ります</div>';
 
@@ -1011,14 +1272,14 @@ function renderPick(){
     '<div class="stack g32">' +
       '<section class="stack g16">' +
         '<div class="eyebrow">他人評価 · Peer review</div>' +
-        '<h1 style="font-size:32px;letter-spacing:-.025em">5人でお互いを採点して、<br>10角形のレーダーにする</h1>' +
-        '<p class="hero-lede">自分以外の4人を、質問ごとに1位から4位まで並べます。全60問。' +
+        '<h1 style="font-size:32px;letter-spacing:-.025em">' + N + '人でお互いを採点して、<br>10角形のレーダーにする</h1>' +
+        '<p class="hero-lede">自分以外の' + m + '人を、質問ごとに1位から' + m + '位まで並べます。全' + NQ + '問。' +
         '自分で決めたパスワードで守られるので、並べた順番を他の人に見られることはありません。</p>' +
       '</section>' +
 
       '<section class="rulebox">' +
-        '<div><div class="rule-k">Scoring</div><div class="rule-v">1位 <b>4pt</b> ／ 2位 <b>2pt</b><br>3位 <b>1pt</b> ／ 4位 <b>0pt</b></div></div>' +
-        '<div><div class="rule-k">Questions</div><div class="rule-v">10カテゴリ × 6問<br>合計 <b>60問</b></div></div>' +
+        '<div><div class="rule-k">Scoring</div><div class="rule-v">' + scaleSummary() + '</div></div>' +
+        '<div><div class="rule-k">Questions</div><div class="rule-v">' + CATS.length + 'カテゴリ × ' + PER_CAT + '問<br>合計 <b>' + NQ + '問</b></div></div>' +
         '<div><div class="rule-k">Privacy</div><div class="rule-v">回答は自分の<br>パスワードで暗号化</div></div>' +
         '<div>' + syncNote + '</div>' +
       '</section>' +
@@ -1030,40 +1291,67 @@ function renderPick(){
         '<div class="who-grid">' + whoHtml + '</div>' +
         '<div id="gate"></div>' +
       '</section>' +
+
+      '<section class="stack g8">' +
+        '<div class="row g8 wrap">' +
+          '<button class="btn btn-ghost btn-sm" id="btn-share">参加者を招待するリンク</button>' +
+          '<button class="btn btn-ghost btn-sm" id="btn-editroster">参加者を変える</button>' +
+        '</div>' +
+        '<div id="sharebox"></div>' +
+      '</section>' +
     '</div>'
   ));
 
   Array.prototype.forEach.call(viewAnswer.querySelectorAll("[data-who]"), function(b){
-    b.addEventListener("click", function(){
-      renderGate(+b.getAttribute("data-who"));
-    });
+    b.addEventListener("click", function(){ renderGate(+b.getAttribute("data-who")); });
   });
 
-  /* サーバーが設定されていれば提出状況を取りに行く（失敗しても回答はできる） */
+  document.getElementById("btn-share").addEventListener("click", function(){
+    var box = document.getElementById("sharebox");
+    if(box.innerHTML){ box.innerHTML = ""; return; }
+    var link = rosterLink();
+    box.appendChild(h(
+      '<div class="card pad stack g12" style="max-width:620px">' +
+        '<div class="row g8" style="justify-content:space-between">' +
+          '<span class="eyebrow">招待リンク</span>' +
+          '<button class="btn btn-sm" id="btn-copylink">コピー</button>' +
+        '</div>' +
+        '<div class="codebox xsmall">' + esc(link) + '</div>' +
+        '<p class="xsmall muted">このリンクを開いた人には、同じ参加者・同じ配点が自動で設定されます。</p>' +
+      '</div>'
+    ));
+    document.getElementById("btn-copylink").addEventListener("click", function(){ copyText(link, this); });
+  });
+
+  document.getElementById("btn-editroster").addEventListener("click", function(){
+    if(!confirm("参加者を変えると、いまの回答はすべて無効になります。\n続けますか？")) return;
+    renderSetup(true); window.scrollTo(0, 0);
+  });
+
   if(syncOn() && !A.remote){
     syncStatus().then(function(d){
       A.remote = { submitted: (d.submitted || []).map(Number) };
-      if(A.screen === "pick") renderPick();
+      if(A.screen === "pick" && ROSTER) renderPick();
     }).catch(function(){
       A.remote = { submitted: Object.keys(getCodes()).map(Number), offline:true };
-      if(A.screen === "pick") renderPick();
+      if(A.screen === "pick" && ROSTER) renderPick();
     });
   }
 }
 
-/* --- パスワードの入口 ------------------------------------------------ */
+/* --- 11c. パスワードの入口 -------------------------------------------- */
+
 function renderGate(person){
   var box = document.getElementById("gate");
   if(!box) return;
-  var isNew = storedAuth(person) == null && !hasDraft(person) &&
-              submittedSet().indexOf(person) < 0;
+  var isNew = storedAuth(person) == null && !hasDraft(person) && submittedSet().indexOf(person) < 0;
   var alreadyDone = submittedSet().indexOf(person) >= 0;
 
   box.innerHTML = "";
   box.appendChild(h(
     '<form class="card pad stack g12" id="gateform" style="max-width:460px">' +
       '<div class="row g8" style="justify-content:space-between">' +
-        '<span class="eyebrow">' + esc(PEOPLE[person]) + ' さん</span>' +
+        '<span class="eyebrow">' + esc(personName(person)) + ' さん</span>' +
         '<button class="btn btn-ghost btn-sm" type="button" id="gate-cancel">閉じる</button>' +
       '</div>' +
       (isNew
@@ -1082,8 +1370,7 @@ function renderGate(person){
       '<p class="xsmall" id="gmsg"></p>' +
     '</form>'
   ));
-  var pw = document.getElementById("gpw");
-  pw.focus();
+  document.getElementById("gpw").focus();
   document.getElementById("gate-cancel").addEventListener("click", function(){ box.innerHTML = ""; });
   document.getElementById("gateform").addEventListener("submit", function(ev){
     ev.preventDefault();
@@ -1109,16 +1396,13 @@ function submitGate(person, isNew, alreadyDone){
   btn.disabled = true;
   gateMsg("確認中…", false);
 
-  /* ハッシュ計算は少し重いので、画面を描き変えてから走らせる */
   setTimeout(function(){
-    var auth = deriveAuth(person, pw);
-    var key  = deriveKey(person, pw);
+    var auth = deriveAuth(ROSTER.id, person, pw);
+    var key  = deriveKey(ROSTER.id, person, pw);
     var known = storedAuth(person);
 
     if(known != null && known !== auth){
-      btn.disabled = false;
-      gateMsg("パスワードが違います。", true);
-      return;
+      btn.disabled = false; gateMsg("パスワードが違います。", true); return;
     }
 
     function proceed(){
@@ -1126,24 +1410,22 @@ function submitGate(person, isNew, alreadyDone){
       if(hasDraft(person)){
         var loaded = loadDraft(person, key);
         if(loaded == null){
-          btn.disabled = false;
-          gateMsg("パスワードが違います。", true);
-          return;
+          btn.disabled = false; gateMsg("パスワードが違います。", true); return;
         }
         order = loaded;
       }
       if(alreadyDone){
-        if(!confirm(PEOPLE[person] + " さんは提出済みです。\n最初から回答し直しますか？（前の回答は上書きされます）")){
+        if(!confirm(personName(person) + " さんは提出済みです。\n最初から回答し直しますか？（前の回答は上書きされます）")){
           btn.disabled = false; gateMsg("", false); return;
         }
-        var c = getCodes(); delete c[person]; lsSet(K_CODES, c);
-        lsDel(K_DRAFT + person);
+        var c = getCodes(); delete c[person]; lsSet(kCodes(), c);
+        lsDel(kDraft(person));
         order = blankOrder();
         if(A.remote && A.remote.submitted){
           A.remote.submitted = A.remote.submitted.filter(function(x){ return x !== person; });
         }
       }
-      lsSet(K_AUTH + person, auth);
+      lsSet(kAuth(person), auth);
       A.evaluator = person; A.key = key; A.auth = auth;
       A.order = order; A.cat = 0;
       for(var ci=0; ci<CATS.length; ci++){ if(!catComplete(ci)){ A.cat = ci; break; } }
@@ -1153,7 +1435,6 @@ function submitGate(person, isNew, alreadyDone){
       window.scrollTo(0, 0);
     }
 
-    /* 別の端末で登録済みかもしれないので、サーバーにも確認する */
     if(known == null && syncOn()){
       syncCheck(person, auth).then(function(d){
         if(d.exists && !d.match){
@@ -1162,18 +1443,19 @@ function submitGate(person, isNew, alreadyDone){
           return;
         }
         proceed();
-      }).catch(function(){
-        proceed();   /* サーバーに繋がらなくても回答はできる */
-      });
+      }).catch(function(){ proceed(); });
     }else{
       proceed();
     }
   }, 30);
 }
 
+/* --- 11d. 質問 --------------------------------------------------------- */
+
 function renderQuiz(){
   var me = A.evaluator;
   var tg = targets(me);
+  var m = nRanked();
   var ci = A.cat;
   var cat = CATS[ci];
   var done = answeredCount();
@@ -1184,16 +1466,16 @@ function renderQuiz(){
   }).join("");
 
   var cardsHtml = cat.qs.map(function(qtext, qi){
-    var qno = ci * 6 + qi;
+    var qno = ci * PER_CAT + qi;
     var order = A.order[qno] || [];
-    var complete = order.length === 4;
+    var complete = order.length === m;
     var chips = tg.map(function(personIdx, slot){
       var rank = order.indexOf(slot);
       var ranked = rank >= 0;
       return '<button class="chip" data-q="' + qno + '" data-slot="' + slot + '" data-ranked="' + (ranked ? 1 : 0) + '" ' +
              'aria-pressed="' + ranked + '">' +
                '<span class="chip-rank">' + (ranked ? (rank + 1) : "–") + '</span>' +
-               '<span class="chip-name">' + esc(PEOPLE[personIdx]) + '</span>' +
+               '<span class="chip-name">' + esc(personName(personIdx)) + '</span>' +
                '<span class="chip-pt">' + (ranked ? PTS[rank] + "pt" : "") + '</span>' +
              '</button>';
     }).join("");
@@ -1205,7 +1487,9 @@ function renderQuiz(){
              '</div>' +
              '<div class="chips">' + chips + '</div>' +
              '<div class="qfoot">' +
-               '<span class="xsmall muted">' + (complete ? "回答済み" : "上位から順にタップ（3人選ぶと最後は自動で4位）") + '</span>' +
+               '<span class="xsmall muted">' + (complete
+                 ? "回答済み"
+                 : "上位から順にタップ（" + (m - 1) + "人選ぶと最後は自動で" + m + "位）") + '</span>' +
                (order.length ? '<button class="btn btn-ghost btn-sm" data-clear="' + qno + '" style="margin-left:auto">やり直す</button>' : "") +
              '</div>' +
            '</div>';
@@ -1220,7 +1504,7 @@ function renderQuiz(){
       '<div class="qbar"><div class="qbar-in">' +
         '<div class="row wrap g12" style="justify-content:space-between">' +
           '<div class="row g8">' +
-            '<span class="pill pill-on"><span class="dot"></span>' + esc(PEOPLE[me]) + ' として回答中</span>' +
+            '<span class="pill pill-on"><span class="dot"></span>' + esc(personName(me)) + ' として回答中</span>' +
             '<button class="btn btn-ghost btn-sm" id="btn-switch">交代する</button>' +
           '</div>' +
           '<span class="num small dim">' + done + ' / ' + NQ + ' 問</span>' +
@@ -1232,7 +1516,8 @@ function renderQuiz(){
       '<div class="stack g8">' +
         '<div class="sec-head">' +
           '<div><div class="eyebrow">Category ' + (ci + 1) + ' / ' + CATS.length + '</div><h2>' + esc(cat.name) + '</h2></div>' +
-          '<p class="sec-note">' + esc(tg.map(function(i){ return PEOPLE[i]; }).join("・")) + ' の4人を1位〜4位に並べてください。</p>' +
+          '<p class="sec-note">' + esc(tg.map(function(i){ return personName(i); }).join("・")) +
+          ' の' + m + '人を1位〜' + m + '位に並べてください。</p>' +
         '</div>' +
       '</div>' +
 
@@ -1241,15 +1526,14 @@ function renderQuiz(){
       '<div class="qnav">' +
         '<button class="btn btn-ghost" id="btn-prev"' + (ci === 0 ? " disabled" : "") + '>← 前のカテゴリ</button>' +
         (isLast
-          ? '<button class="btn btn-primary" id="btn-submit"' + (allDone ? "" : " disabled") + '>回答を確定してコードを作る</button>'
+          ? '<button class="btn btn-primary" id="btn-submit"' + (allDone ? "" : " disabled") + '>回答を確定して送信</button>'
           : '<button class="btn btn-primary" id="btn-next">次のカテゴリ →</button>') +
-        (allDone && !isLast ? '<button class="btn" id="btn-finish">確定してコードを作る</button>' : "") +
+        (allDone && !isLast ? '<button class="btn" id="btn-finish">確定して送信</button>' : "") +
         (!allDone ? '<button class="btn btn-ghost" id="btn-jump" style="margin-left:auto">未回答へ移動（残り ' + (NQ - done) + '）</button>' : "") +
       '</div>' +
     '</div>'
   ));
 
-  /* chips */
   Array.prototype.forEach.call(viewAnswer.querySelectorAll(".chip"), function(b){
     b.addEventListener("click", function(){
       var q = +b.getAttribute("data-q"), slot = +b.getAttribute("data-slot");
@@ -1259,8 +1543,8 @@ function renderQuiz(){
         cur.splice(at, 1);
       }else{
         cur.push(slot);
-        if(cur.length === 3){
-          for(var s2=0;s2<4;s2++){ if(cur.indexOf(s2) < 0){ cur.push(s2); break; } }
+        if(cur.length === m - 1){
+          for(var s2=0;s2<m;s2++){ if(cur.indexOf(s2) < 0){ cur.push(s2); break; } }
         }
       }
       A.order[q] = cur.length ? cur : null;
@@ -1288,7 +1572,7 @@ function renderQuiz(){
   if((el = document.getElementById("btn-switch")))el.addEventListener("click", function(){ A.screen = "pick"; renderAnswer(); window.scrollTo(0,0); });
   if((el = document.getElementById("btn-jump")))  el.addEventListener("click", function(){
     for(var q=0;q<NQ;q++){
-      if(!(A.order[q] && A.order[q].length === 4)){
+      if(!(A.order[q] && A.order[q].length === m)){
         var c2 = QUESTIONS[q].cat;
         if(c2 !== A.cat){ A.cat = c2; renderQuiz(); }
         var t = document.getElementById("q" + q);
@@ -1297,6 +1581,7 @@ function renderQuiz(){
       }
     }
   });
+
   function submit(ev){
     if(answeredCount() !== NQ) return;
     var code = encodeCode(A.evaluator, A.order);
@@ -1304,14 +1589,13 @@ function renderQuiz(){
 
     function finish(sent, errText){
       saveCode(A.evaluator, code);
-      lsDel(K_DRAFT + A.evaluator);
+      lsDel(kDraft(A.evaluator));
       if(A.remote && A.remote.submitted && A.remote.submitted.indexOf(A.evaluator) < 0){
         A.remote.submitted.push(A.evaluator);
       }
       A.screen = "done"; A.code = code; A.sent = sent; A.sendError = errText || null;
       renderAnswer(); window.scrollTo(0, 0);
     }
-
     if(syncOn()){
       if(btn){ btn.disabled = true; btn.textContent = "送信中…"; }
       syncSubmit(A.evaluator, code, A.auth)
@@ -1325,18 +1609,19 @@ function renderQuiz(){
   if((el = document.getElementById("btn-finish"))) el.addEventListener("click", submit);
 }
 
+/* --- 11e. 送信完了 ----------------------------------------------------- */
+
 function renderDone(){
-  var code = A.code;
-  var sent = A.sent;
-  var showCode = !sent;      /* 送信できたならコードを見せる必要はない */
-  var n = submittedSet().length;
+  var code = A.code, sent = A.sent;
+  var showCode = !sent;
+  var n = submittedSet().length, N = nPeople();
 
   viewAnswer.innerHTML = "";
   viewAnswer.appendChild(h(
     '<div class="stack g24">' +
       '<section class="stack g12">' +
         '<div class="eyebrow">Submitted</div>' +
-        '<h1 style="font-size:28px">' + esc(PEOPLE[A.evaluator]) + ' さんの回答を受け付けました</h1>' +
+        '<h1 style="font-size:28px">' + esc(personName(A.evaluator)) + ' さんの回答を受け付けました</h1>' +
         '<p class="hero-lede">' +
           (sent
             ? '集計に反映されました。もう何もしなくて大丈夫です。'
@@ -1345,14 +1630,11 @@ function renderDone(){
                 : '下の回答コードを集計担当の人に送ってください。この端末で集計する場合は送らなくて大丈夫です。')) +
         '</p>' +
       '</section>' +
-
       (sent
-        ? '<div class="notice"><b>' + n + ' / 5人</b> が提出済みです。' +
+        ? '<div class="notice"><b>' + n + ' / ' + N + '人</b> が提出済みです。' +
           '全員そろったら、集計担当が「結果を見る」から結果を開けます。</div>'
         : "") +
-
       (A.sendError ? '<div class="notice notice-crit">' + esc(A.sendError) + '</div>' : "") +
-
       (showCode
         ? '<div class="card pad stack g12">' +
             '<div class="row g8" style="justify-content:space-between">' +
@@ -1363,11 +1645,9 @@ function renderDone(){
             '<p class="xsmall muted">スペースは読みやすさのためのものです。含めても含めなくても読み込めます。</p>' +
           '</div>'
         : "") +
-
       (!sent && syncOn()
         ? '<div class="row g8 wrap"><button class="btn btn-primary" id="btn-retry">もう一度送信する</button></div>'
         : "") +
-
       '<div class="row g8 wrap">' +
         '<button class="btn btn-ghost" id="btn-back">最初の画面に戻る</button>' +
       '</div>' +
@@ -1394,9 +1674,6 @@ function copyText(text, btn){
   var label = btn.textContent;
   function ok(){ btn.textContent = "コピーしました"; setTimeout(function(){ btn.textContent = label; }, 1600); }
   function ng(){ btn.textContent = "手動で選択してください"; setTimeout(function(){ btn.textContent = label; }, 2200); }
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(ok, function(){ fallback(); });
-  }else{ fallback(); }
   function fallback(){
     try{
       var ta = document.createElement("textarea");
@@ -1407,16 +1684,24 @@ function copyText(text, btn){
       okc ? ok() : ng();
     }catch(e){ ng(); }
   }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(ok, fallback);
+  }else{ fallback(); }
 }
 
 /* ============================================================
-   8. Result view
+   12. 結果タブ
    ============================================================ */
 
 var R = { unlocked:false, compare:[0,1,2], fetched:null };
 
 function renderResult(){
   hideTip();
+  if(!ROSTER){
+    viewResult.innerHTML = "";
+    viewResult.appendChild(h('<div class="notice notice-warn">先に「回答する」タブで参加者を設定してください。</div>'));
+    return;
+  }
   if(!R.unlocked) return renderLock();
   return renderDashboard();
 }
@@ -1440,8 +1725,7 @@ function renderLock(){
   ));
   document.getElementById("lockform").addEventListener("submit", function(ev){
     ev.preventDefault();
-    var v = document.getElementById("pw").value;
-    if(v === PASSWORD){
+    if(document.getElementById("pw").value === PASSWORD){
       try{ sessionStorage.setItem(K_UNLOCK, "1"); }catch(e){}
       R.unlocked = true; renderResult(); window.scrollTo(0,0);
     }else{
@@ -1457,8 +1741,8 @@ function renderDashboard(){
   var codes = getCodes();
   var agg = aggregate(codes);
   var nSub = agg.submitted.length;
+  var N = nPeople();
 
-  /* サーバーが設定されていれば、開いた時点で取りに行く */
   if(syncOn() && !R.fetched){
     R.fetched = "loading";
     syncList().then(function(d){
@@ -1479,9 +1763,9 @@ function renderDashboard(){
   var root = h('<div class="stack g40"></div>');
   viewResult.appendChild(root);
 
-  /* 5人そろうまでは何も集計しない。
-     途中経過が見えると、まだ回答していない人がそれを見て順位を変えられる。 */
-  if(nSub < PEOPLE.length){
+  /* 全員そろうまでは集計しない。
+     途中経過が見えると、まだ回答していない人がそれに合わせて順位を変えられる。 */
+  if(nSub < N){
     root.appendChild(secWaiting(agg, nSub));
     root.appendChild(secSubmissions(codes, agg));
     root.appendChild(secAdmin());
@@ -1490,7 +1774,6 @@ function renderDashboard(){
     return;
   }
 
-  /* 5人そろったので、ここからは全部見せる */
   root.appendChild(secSubmissions(codes, agg));
   root.appendChild(secOverall(agg));
   root.appendChild(secRadars(agg));
@@ -1505,10 +1788,9 @@ function renderDashboard(){
   bindAdmin();
 }
 
-/* --- 全員そろうまでのロック画面 ------------------------------------- */
 function secWaiting(agg, nSub){
-  var missing = [];
-  PEOPLE.forEach(function(n, i){ if(agg.submitted.indexOf(i) < 0) missing.push(n); });
+  var N = nPeople(), missing = [];
+  ROSTER.names.forEach(function(n, i){ if(agg.submitted.indexOf(i) < 0) missing.push(n); });
   var loading = R.fetched === "loading";
 
   return h(
@@ -1517,29 +1799,25 @@ function secWaiting(agg, nSub){
         '<div class="stack g8">' +
           '<span class="eyebrow">Locked</span>' +
           '<span class="hero-fig">' + nSub +
-            '<span style="font-size:26px;font-weight:700;color:var(--ink-muted)"> / 5</span></span>' +
+            '<span style="font-size:26px;font-weight:700;color:var(--ink-muted)"> / ' + N + '</span></span>' +
           '<span class="small muted">提出済み</span>' +
         '</div>' +
         '<div class="stack g12">' +
-          '<h2 style="font-size:20px">5人そろうまで結果は表示されません</h2>' +
+          '<h2 style="font-size:20px">' + N + '人そろうまで結果は表示されません</h2>' +
           '<p class="sec-note">途中経過が見えると、まだ回答していない人がそれに合わせて順位を変えられてしまいます。' +
           '全員の回答が届くまで、集計もランキングも出しません。</p>' +
-          '<div class="progress"><i style="width:' + (nSub / PEOPLE.length * 100) + '%"></i></div>' +
+          '<div class="progress"><i style="width:' + (nSub / N * 100) + '%"></i></div>' +
           (loading
             ? '<p class="small muted">サーバーから取得中…</p>'
-            : (missing.length
-                ? '<p class="small dim">未提出：<b>' + esc(missing.join("、")) + '</b></p>'
-                : "")) +
+            : (missing.length ? '<p class="small dim">未提出：<b>' + esc(missing.join("、")) + '</b></p>' : "")) +
         '</div>' +
       '</div>' +
     '</section>'
   );
 }
 
-
-/* --- 8.1 submissions ------------------------------------------------ */
 function secSubmissions(codes, agg){
-  var chips = PEOPLE.map(function(name, i){
+  var chips = ROSTER.names.map(function(name, i){
     var ok = agg.submitted.indexOf(i) >= 0;
     return '<span class="pill ' + (ok ? "pill-done" : "") + '"><span class="dot"></span>' +
            esc(name) + ' ' + (ok ? "提出済み" : "未提出") + '</span>';
@@ -1577,7 +1855,7 @@ function secSubmissions(codes, agg){
       '<details class="qgroup"' + (syncOn() ? "" : " open") + '>' +
         '<summary>回答コードを手で読み込む</summary>' +
         '<div class="qgroup-body"><div class="stack g12">' +
-          '<textarea class="field" id="codein" placeholder="PR1 0ABCDEFGHJ ... のような66文字のコードを貼り付け（複数行可）"></textarea>' +
+          '<textarea class="field" id="codein" placeholder="PR2 で始まる' + codeLength(nRanked()) + '文字のコードを貼り付け（複数行可）"></textarea>' +
           '<div class="row wrap g8">' +
             '<button class="btn btn-primary btn-sm" id="btn-load">読み込む</button>' +
           '</div>' +
@@ -1593,14 +1871,12 @@ function bindSubmissions(){
   if(btn) btn.addEventListener("click", function(){
     var raw = document.getElementById("codein").value;
     var lines = raw.split(/[\r\n]+/).map(function(s){ return s.trim(); }).filter(Boolean);
-    if(!lines.length){
-      msg('<div class="notice notice-warn">コードが入力されていません。</div>'); return;
-    }
+    if(!lines.length){ msg('<div class="notice notice-warn">コードが入力されていません。</div>'); return; }
     var okList = [], errList = [];
     lines.forEach(function(line, i){
       var d = decodeCode(line);
       if(d.error){ errList.push((i + 1) + "行目：" + d.error); }
-      else{ saveCode(d.evaluator, d.code); okList.push(PEOPLE[d.evaluator]); }
+      else{ saveCode(d.evaluator, d.code); okList.push(personName(d.evaluator)); }
     });
     var out = "";
     if(okList.length) out += '<div class="notice"><b>' + okList.length + '件</b>読み込みました：' + esc(okList.join("、")) + '</div>';
@@ -1610,35 +1886,33 @@ function bindSubmissions(){
   });
 
   var rf = document.getElementById("btn-refetch");
-  if(rf) rf.addEventListener("click", function(){
-    R.fetched = null; renderDashboard(); window.scrollTo(0, 0);
-  });
+  if(rf) rf.addEventListener("click", function(){ R.fetched = null; renderDashboard(); window.scrollTo(0, 0); });
 
   function msg(html){ var m = document.getElementById("loadmsg"); if(m) m.innerHTML = html; }
 }
 
-/* --- 8.2 overall ---------------------------------------------------- */
 function secOverall(agg){
   var rk = rankOf(agg.overall);
   var winner = rk.order[0];
   var rows = rk.order.map(function(p){
     var v = agg.overall[p];
     var total = agg.raw[p].reduce(function(a,b){ return a + b; }, 0);
-    return rankRow(rk.ranks[p], PEOPLE[p], v / MAXPT, fmt(v) + " pt", "合計 " + total + "pt");
+    return rankRow(rk.ranks[p], personName(p), v / MAXPT, fmt(v) + " pt", "合計 " + total + "pt");
   }).join("");
 
   return h(
     '<section class="stack g16">' +
       '<div class="sec-head">' +
         '<div><div class="eyebrow">Step 2 · Overall</div><h2>総合ランキング</h2></div>' +
-        '<p class="sec-note">全60問の平均。0〜4ptで、' + BASELINE + 'ptが「4人の中で平均的」の目安です。</p>' +
+        '<p class="sec-note">全' + NQ + '問の平均。0〜' + ptText(MAXPT) + 'ptで、' +
+        ptText(BASELINE) + 'ptが「この人数の中で平均的」の目安です。</p>' +
       '</div>' +
       '<div class="card pad hero">' +
         '<div class="stack g8">' +
           '<span class="eyebrow">総合1位</span>' +
-          '<span class="hero-name">' + esc(PEOPLE[winner]) + '</span>' +
+          '<span class="hero-name">' + esc(personName(winner)) + '</span>' +
           '<span class="hero-fig">' + fmt(agg.overall[winner]) + '</span>' +
-          '<span class="small muted">平均pt（満点4.00・基準' + BASELINE + '）</span>' +
+          '<span class="small muted">平均pt（満点' + fmt(MAXPT) + '・基準' + ptText(BASELINE) + '）</span>' +
         '</div>' +
         '<div class="rank-list">' + rows + '</div>' +
       '</div>' +
@@ -1655,9 +1929,8 @@ function rankRow(rank, name, frac, main, sub){
   '</div>';
 }
 
-/* --- 8.3 radar small multiples -------------------------------------- */
 function secRadars(agg){
-  var cells = PEOPLE.map(function(name, p){
+  var cells = ROSTER.names.map(function(name, p){
     var svg = radarSVG(
       [{ name:name, values:agg.cat[p], color:"var(--s1)", shape:"circle" }],
       { w:280, h:248, r:72, labelR:90, markerR:4 }
@@ -1671,8 +1944,8 @@ function secRadars(agg){
     '<section class="stack g16">' +
       '<div class="sec-head">' +
         '<div><div class="eyebrow">Step 3 · Profile</div><h2>カテゴリ別レーダー</h2></div>' +
-        '<p class="sec-note">10カテゴリの平均pt。外側の輪が4.00pt、内側の細い10角形が基準の' + BASELINE + 'ptです。' +
-        '基準より外側に膨らんでいるところが、その人の強みとして評価されています。</p>' +
+        '<p class="sec-note">10カテゴリの平均pt。外側の輪が' + fmt(MAXPT) + 'pt、中央の薄いゾーンが基準の' +
+        ptText(BASELINE) + 'ptより内側です。ゾーンから外に膨らんでいるところが、その人の強みとして評価されています。</p>' +
       '</div>' +
       '<div class="radar-grid">' + cells + '</div>' +
       '<p class="xsmall muted">軸ラベルの正式名称：' +
@@ -1682,24 +1955,22 @@ function secRadars(agg){
   );
 }
 
-/* --- 8.4 comparison (max 3 overlaid) -------------------------------- */
 function secCompare(agg){
-  var sel = R.compare.slice(0, 3);
+  var sel = R.compare.filter(function(p){ return p < nPeople(); }).slice(0, 3);
   var series = sel.map(function(p, i){
-    return { name:PEOPLE[p], values:agg.cat[p], color:"var(--s" + (i + 1) + ")", shape:SHAPES[i] };
+    return { name:personName(p), values:agg.cat[p], color:"var(--s" + (i + 1) + ")", shape:SHAPES[i] };
   });
 
-  var picks = PEOPLE.map(function(name, p){
+  var picks = ROSTER.names.map(function(name, p){
     var on = sel.indexOf(p) >= 0;
-    var colorIdx = on ? sel.indexOf(p) + 1 : 0;
-    var style = on ? ' style="color:var(--s' + colorIdx + ')"' : "";
+    var style = on ? ' style="color:var(--s' + (sel.indexOf(p) + 1) + ')"' : "";
     var disabled = (!on && sel.length >= 3) ? " disabled" : "";
     return '<button class="pick" data-cmp="' + p + '" aria-pressed="' + on + '"' + style + disabled + '>' +
       (on ? '<span class="legend-swatch" data-shape="' + SHAPES[sel.indexOf(p)] + '"></span>' : "") +
       esc(name) + '</button>';
   }).join("");
 
-  var legend = series.map(function(s, i){
+  var legend = series.map(function(s){
     return '<span class="legend-item" style="color:' + s.color + '">' +
       '<span class="legend-swatch" data-shape="' + s.shape + '"></span>' +
       '<span style="color:var(--ink)">' + esc(s.name) + '</span></span>';
@@ -1727,7 +1998,7 @@ function secCompare(agg){
             '<div class="cmp-chart">' +
               '<div class="legend">' + legend + '</div>' +
               radarSVG(series, { w:420, h:390, r:126, labelR:150, font:12, markerR:4.5 }) +
-              '<p class="xsmall muted">中央の薄いゾーンは基準（' + BASELINE + 'pt）より内側。外周が4.00ptです。</p>' +
+              '<p class="xsmall muted">中央の薄いゾーンは基準（' + ptText(BASELINE) + 'pt）より内側。外周が' + fmt(MAXPT) + 'ptです。</p>' +
             '</div>' +
             '<div class="scrollx"><table class="data"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
           '</div></div>'
@@ -1750,13 +2021,12 @@ function bindCompare(agg){
   });
 }
 
-/* --- 8.5 category table --------------------------------------------- */
 function secCategoryTable(agg){
-  var head = '<tr><th>カテゴリ</th>' + PEOPLE.map(function(n){ return '<th>' + esc(n) + '</th>'; }).join("") + '<th>1位</th></tr>';
+  var head = '<tr><th>カテゴリ</th>' + ROSTER.names.map(function(n){ return '<th>' + esc(n) + '</th>'; }).join("") + '<th>1位</th></tr>';
   var body = CATS.map(function(c, ci){
-    var vals = PEOPLE.map(function(_, p){ return agg.cat[p][ci]; });
+    var vals = ROSTER.names.map(function(_, p){ return agg.cat[p][ci]; });
     var rk = rankOf(vals);
-    var winners = PEOPLE.filter(function(_, p){ return rk.ranks[p] === 1; });
+    var winners = ROSTER.names.filter(function(_, p){ return rk.ranks[p] === 1; });
     return '<tr><td>' + esc(c.name) + '</td>' +
       vals.map(function(v, p){
         return '<td class="n' + (rk.ranks[p] === 1 ? " top" : "") + '">' + fmt(v) +
@@ -1765,17 +2035,17 @@ function secCategoryTable(agg){
       '<td>' + esc(winners.join("・")) + '</td></tr>';
   }).join("");
 
-  var totals = PEOPLE.map(function(_, p){ return agg.overall[p]; });
+  var totals = ROSTER.names.map(function(_, p){ return agg.overall[p]; });
   var trk = rankOf(totals);
   var foot = '<tr><td><b>総合</b></td>' + totals.map(function(v, p){
     return '<td class="n' + (trk.ranks[p] === 1 ? " top" : "") + '"><b>' + fmt(v) + '</b> <span class="muted xsmall">(' + trk.ranks[p] + '位)</span></td>';
-  }).join("") + '<td>' + esc(PEOPLE.filter(function(_, p){ return trk.ranks[p] === 1; }).join("・")) + '</td></tr>';
+  }).join("") + '<td>' + esc(ROSTER.names.filter(function(_, p){ return trk.ranks[p] === 1; }).join("・")) + '</td></tr>';
 
   return h(
     '<section class="stack g16">' +
       '<div class="sec-head">' +
         '<div><div class="eyebrow">Step 5 · Table</div><h2>カテゴリ別ランキング</h2></div>' +
-        '<p class="sec-note">評価者1人あたりの平均pt（0〜4）と、その中での順位。</p>' +
+        '<p class="sec-note">評価者1人あたりの平均pt（0〜' + ptText(MAXPT) + '）と、その中での順位。</p>' +
       '</div>' +
       '<div class="card pad"><div class="scrollx"><table class="data">' +
         '<thead>' + head + '</thead><tbody>' + body + foot + '</tbody>' +
@@ -1784,15 +2054,14 @@ function secCategoryTable(agg){
   );
 }
 
-/* --- 8.6 per-question rankings -------------------------------------- */
 function secQuestions(agg){
   var groups = CATS.map(function(c, ci){
     var blocks = c.qs.map(function(qtext, qi){
-      var qno = ci * 6 + qi;
-      var vals = PEOPLE.map(function(_, p){ return agg.avg[p][qno]; });
+      var qno = ci * PER_CAT + qi;
+      var vals = ROSTER.names.map(function(_, p){ return agg.avg[p][qno]; });
       var rk = rankOf(vals);
       var rows = rk.order.map(function(p){
-        return rankRow(rk.ranks[p], PEOPLE[p], vals[p] / MAXPT, fmt(vals[p]) + " pt", "合計 " + agg.raw[p][qno] + "pt");
+        return rankRow(rk.ranks[p], personName(p), vals[p] / MAXPT, fmt(vals[p]) + " pt", "合計 " + agg.raw[p][qno] + "pt");
       }).join("");
       return '<div>' +
         '<div class="qblock-title"><span class="qno">Q' + String(qno + 1).padStart(2, "0") + '</span>' + esc(qtext) + '</div>' +
@@ -1800,12 +2069,12 @@ function secQuestions(agg){
       '</div>';
     }).join("");
 
-    var catVals = PEOPLE.map(function(_, p){ return agg.cat[p][ci]; });
+    var catVals = ROSTER.names.map(function(_, p){ return agg.cat[p][ci]; });
     var top = rankOf(catVals).order[0];
 
     return '<details class="qgroup"' + (ci === 0 ? " open" : "") + '>' +
       '<summary>' + esc(c.name) +
-        '<span class="pill" style="margin-left:auto;font-weight:600">総合1位 ' + esc(PEOPLE[top]) + '</span>' +
+        '<span class="pill" style="margin-left:auto;font-weight:600">総合1位 ' + esc(personName(top)) + '</span>' +
       '</summary>' +
       '<div class="qgroup-body">' + blocks + '</div>' +
     '</details>';
@@ -1814,20 +2083,20 @@ function secQuestions(agg){
   return h(
     '<section class="stack g16">' +
       '<div class="sec-head">' +
-        '<div><div class="eyebrow">Step 6 · Detail</div><h2>質問別ランキング（全60問）</h2></div>' +
-        '<p class="sec-note">1問ごとの順位。「平均pt」は評価者1人あたり、「合計pt」は全評価者の素点です。</p>' +
+        '<div><div class="eyebrow">Step 6 · Detail</div><h2>質問別ランキング（全' + NQ + '問）</h2></div>' +
+        '<p class="sec-note">1問ごとの順位。「平均pt」は評価者1人あたり、「合計pt」は全評価者の素点です。' +
+        '1問で配られる合計は ' + (PTS_SUM * nPeople()) + 'pt（' + PTS_SUM + 'pt × ' + nPeople() + '人）です。</p>' +
       '</div>' +
       '<div>' + groups + '</div>' +
     '</section>'
   );
 }
 
-/* --- 8.7 raw table + text export ------------------------------------ */
 function secRawTable(agg){
   var head = '<tr><th>#</th><th>カテゴリ</th><th>質問</th>' +
-             PEOPLE.map(function(n){ return '<th>' + esc(n) + '</th>'; }).join("") + '</tr>';
+             ROSTER.names.map(function(n){ return '<th>' + esc(n) + '</th>'; }).join("") + '</tr>';
   var body = QUESTIONS.map(function(q){
-    var vals = PEOPLE.map(function(_, p){ return agg.avg[p][q.no]; });
+    var vals = ROSTER.names.map(function(_, p){ return agg.avg[p][q.no]; });
     var rk = rankOf(vals);
     return '<tr><td class="n">' + (q.no + 1) + '</td><td>' + esc(CATS[q.cat].short) + '</td><td>' + esc(q.text) + '</td>' +
       vals.map(function(v, p){
@@ -1835,17 +2104,17 @@ function secRawTable(agg){
       }).join("") + '</tr>';
   }).join("");
 
-  var tsv = ["#\tカテゴリ\t質問\t" + PEOPLE.join("\t")];
+  var tsv = ["#\tカテゴリ\t質問\t" + ROSTER.names.join("\t")];
   QUESTIONS.forEach(function(q){
     tsv.push((q.no + 1) + "\t" + CATS[q.cat].name + "\t" + q.text + "\t" +
-      PEOPLE.map(function(_, p){ return fmt(agg.avg[p][q.no]); }).join("\t"));
+      ROSTER.names.map(function(_, p){ return fmt(agg.avg[p][q.no]); }).join("\t"));
   });
   tsv.push("");
   tsv.push("カテゴリ平均\t\t\t");
   CATS.forEach(function(c, ci){
-    tsv.push(c.name + "\t\t\t" + PEOPLE.map(function(_, p){ return fmt(agg.cat[p][ci]); }).join("\t"));
+    tsv.push(c.name + "\t\t\t" + ROSTER.names.map(function(_, p){ return fmt(agg.cat[p][ci]); }).join("\t"));
   });
-  tsv.push("総合\t\t\t" + PEOPLE.map(function(_, p){ return fmt(agg.overall[p]); }).join("\t"));
+  tsv.push("総合\t\t\t" + ROSTER.names.map(function(_, p){ return fmt(agg.overall[p]); }).join("\t"));
 
   var sec = h(
     '<section class="stack g16">' +
@@ -1884,15 +2153,13 @@ function secRawTable(agg){
   return sec;
 }
 
-/* --- 8.8 admin ------------------------------------------------------ */
 function secAdmin(){
   var resetRow = syncOn()
     ? '<div class="stack g8">' +
         '<span class="eyebrow">パスワードを忘れた人がいるとき</span>' +
-        '<p class="small dim">その人の登録を消すと、本人が新しいパスワードで回答をやり直せます。' +
-        '提出済みの回答も消えます。</p>' +
+        '<p class="small dim">その人の登録を消すと、本人が新しいパスワードで回答をやり直せます。提出済みの回答も消えます。</p>' +
         '<div class="row g8 wrap">' +
-          PEOPLE.map(function(n, i){
+          ROSTER.names.map(function(n, i){
             return '<button class="btn btn-ghost btn-sm" data-reset="' + i + '">' + esc(n) + 'をリセット</button>';
           }).join("") +
         '</div>' +
@@ -1904,6 +2171,11 @@ function secAdmin(){
     '<section class="stack g12 no-print">' +
       '<div class="sec-head"><div><div class="eyebrow">Admin</div><h2>管理</h2></div></div>' +
       '<div class="card pad stack g12">' +
+        '<div class="stack g8">' +
+          '<span class="eyebrow">いまの設定</span>' +
+          '<p class="small dim">' + nPeople() + '人（' + esc(ROSTER.names.join("・")) + '）／ 配点 ' +
+          PTS.join("-") + ' ／ 名簿ID <span class="num">' + esc(ROSTER.id) + '</span></p>' +
+        '</div><hr class="hr">' +
         resetRow +
         '<p class="small dim">この端末に残っている下書きと回答コードを消します。' +
         (syncOn() ? 'サーバー側のデータは消えません。' : '消すと元に戻せません。') + '</p>' +
@@ -1920,8 +2192,8 @@ function bindAdmin(){
   var w = document.getElementById("btn-wipe");
   if(w) w.addEventListener("click", function(){
     if(!confirm("この端末に保存された回答コード・下書き・パスワード設定を消去します。よろしいですか？")) return;
-    lsDel(K_CODES);
-    for(var i=0;i<PEOPLE.length;i++){ lsDel(K_DRAFT + i); lsDel(K_AUTH + i); }
+    lsDel(kCodes());
+    for(var i=0;i<nPeople();i++){ lsDel(kDraft(i)); lsDel(kAuth(i)); }
     R.fetched = null; A.remote = null;
     renderDashboard(); renderAnswer(); window.scrollTo(0,0);
   });
@@ -1933,14 +2205,14 @@ function bindAdmin(){
   Array.prototype.forEach.call(viewResult.querySelectorAll("[data-reset]"), function(b){
     b.addEventListener("click", function(){
       var i = +b.getAttribute("data-reset");
-      if(!confirm(PEOPLE[i] + " さんの登録と提出済みの回答を消します。よろしいですか？")) return;
+      if(!confirm(personName(i) + " さんの登録と提出済みの回答を消します。よろしいですか？")) return;
       var m = document.getElementById("resetmsg");
       b.disabled = true;
       syncReset(i).then(function(){
-        var c = getCodes(); delete c[i]; lsSet(K_CODES, c);
-        lsDel(K_DRAFT + i); lsDel(K_AUTH + i);
+        var c = getCodes(); delete c[i]; lsSet(kCodes(), c);
+        lsDel(kDraft(i)); lsDel(kAuth(i));
         A.remote = null; R.fetched = null;
-        if(m){ m.textContent = PEOPLE[i] + " さんをリセットしました。"; m.style.color = "var(--good)"; }
+        if(m){ m.textContent = personName(i) + " さんをリセットしました。"; m.style.color = "var(--good)"; }
         setTimeout(function(){ renderDashboard(); window.scrollTo(0,0); }, 800);
       }).catch(function(err){
         b.disabled = false;
@@ -1951,7 +2223,7 @@ function bindAdmin(){
 }
 
 /* ============================================================
-   9. Tabs / boot
+   13. タブと起動
    ============================================================ */
 
 var tabAnswer = document.getElementById("tab-answer");
@@ -1969,7 +2241,7 @@ function setTab(which){
 tabAnswer.addEventListener("click", function(){ setTab("answer"); });
 tabResult.addEventListener("click", function(){ setTab("result"); });
 
-/* the question bar sticks below the top bar, which grows taller when it wraps */
+/* 質問バーは上のバーの下に貼り付く。上のバーは折り返すと高くなる */
 (function trackTopbar(){
   var bar = document.querySelector(".topbar");
   function measure(){
@@ -1981,7 +2253,39 @@ tabResult.addEventListener("click", function(){ setTab("result"); });
 })();
 
 try{ R.unlocked = sessionStorage.getItem(K_UNLOCK) === "1"; }catch(e){}
-renderAnswer();
+
+/* 名簿の決定順：招待リンク → この端末の記録 → サーバー */
+(function bootRoster(){
+  var fromHash = rosterFromHash();
+  var stored = lsGet(K_ROSTER, null);
+
+  if(fromHash){
+    applyRoster(fromHash);
+    lsSet(K_ROSTER, fromHash);
+  }else if(stored && stored.names && stored.id){
+    applyRoster(stored);
+  }
+  renderAnswer();
+
+  if(syncOn()){
+    syncGetRoster().then(function(d){
+      if(!d.names || !d.names.length) {
+        /* サーバーが空なら、この端末の名簿を登録しておく */
+        if(ROSTER) syncSetRoster().catch(function(){});
+        return;
+      }
+      var server = makeRoster(d.names, d.scale === "linear" ? "linear" : "double");
+      if(!ROSTER || server.id !== ROSTER.id){
+        applyRoster(server);
+        lsSet(K_ROSTER, server);
+        A = { screen:"pick", evaluator:null, order:[], cat:0, key:null, auth:null, remote:null };
+        R.fetched = null;
+        renderAnswer();
+        if(R.unlocked) renderResult();
+      }
+    }).catch(function(){});
+  }
+})();
 
 })();
 </script>
