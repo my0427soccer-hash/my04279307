@@ -1,0 +1,14 @@
+{
+  "appId": "com.my0427soccer.hyokaradar",
+  "appName": "相互評価レーダー",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "always",
+    "backgroundColor": "#f1f4f3"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
