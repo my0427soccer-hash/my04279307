@@ -1,6 +1,5 @@
 {
   "database_path": "data/bugfare.sqlite3",
-
   "provider": {
     "name": "travelpayouts",
     "token": "${TRAVELPAYOUTS_TOKEN}",
@@ -8,43 +7,76 @@
     "request_pause_seconds": 0.4,
     "max_requests": 400
   },
-
   "search": {
-    "origins": ["HND", "NRT"],
-    "trip_types": ["round", "oneway"],
+    "origins": [
+      "HND",
+      "NRT"
+    ],
+    "trip_types": [
+      "round",
+      "oneway"
+    ],
     "months_ahead": 6,
     "min_days_ahead": 3,
     "limit_per_query": 30,
     "direct_only": false
   },
-
   "targets": [
     {
       "name": "北米・ハワイ",
-      "destinations": ["LAX", "SFO", "SEA", "JFK", "ORD", "YVR", "HNL"],
+      "destinations": [
+        "LAX",
+        "SFO",
+        "SEA",
+        "JFK",
+        "ORD",
+        "YVR",
+        "HNL"
+      ],
       "alert_price": 60000,
       "oneway_alert_price": 35000
     },
     {
       "name": "ヨーロッパ",
-      "destinations": ["LHR", "CDG", "FRA", "MAD", "FCO", "HEL", "IST"],
+      "destinations": [
+        "LHR",
+        "CDG",
+        "FRA",
+        "MAD",
+        "FCO",
+        "HEL",
+        "IST"
+      ],
       "alert_price": 60000,
       "oneway_alert_price": 35000
     },
     {
       "name": "東南アジア・オセアニア",
-      "destinations": ["BKK", "SIN", "KUL", "DPS", "SGN", "MNL", "SYD"],
+      "destinations": [
+        "BKK",
+        "SIN",
+        "KUL",
+        "DPS",
+        "SGN",
+        "MNL",
+        "SYD"
+      ],
       "alert_price": 30000,
       "oneway_alert_price": 18000
     },
     {
       "name": "東アジア",
-      "destinations": ["ICN", "TPE", "HKG", "PVG", "PEK"],
+      "destinations": [
+        "ICN",
+        "TPE",
+        "HKG",
+        "PVG",
+        "PEK"
+      ],
       "alert_price": 15000,
       "oneway_alert_price": 9000
     }
   ],
-
   "detection": {
     "drop_ratio": 0.5,
     "min_samples": 8,
@@ -53,7 +85,6 @@
     "min_price_jpy": 3000,
     "max_price_jpy": 2000000
   },
-
   "alerting": {
     "cooldown_hours": 12,
     "max_alerts_per_run": 10,
@@ -61,10 +92,20 @@
     "adults": 1,
     "cabin_class": "economy"
   },
-
   "notifiers": [
     {
+      "type": "email",
+      "host": "smtp.gmail.com",
+      "port": 587,
+      "username": "${SMTP_USERNAME}",
+      "password": "${SMTP_PASSWORD}",
+      "to": [
+        "${ALERT_EMAIL_TO}"
+      ]
+    },
+    {
       "type": "discord",
+      "enabled": false,
       "webhook_url": "${DISCORD_WEBHOOK_URL}"
     },
     {
@@ -72,15 +113,6 @@
       "enabled": false,
       "bot_token": "${TELEGRAM_BOT_TOKEN}",
       "chat_id": "${TELEGRAM_CHAT_ID}"
-    },
-    {
-      "type": "email",
-      "enabled": false,
-      "host": "smtp.gmail.com",
-      "port": 587,
-      "username": "${SMTP_USERNAME}",
-      "password": "${SMTP_PASSWORD}",
-      "to": ["${ALERT_EMAIL_TO}"]
     }
   ]
 }

@@ -7,6 +7,8 @@
 通知にはその日程の **Skyscanner 検索ページへの直リンク**が入るので、
 届いた通知をタップすればそのまま Skyscanner で確認・購入できます。
 
+通知は**既定でメールに届きます**（Discord / Slack / Telegram にも切り替えられます）。
+
 ```
 🚨 HND→LAX 往復 ¥39,800
 日程: 2026/04/15（水）発 → 04/22（水）帰り・7泊
@@ -99,33 +101,65 @@ Python 3.9 以降なら追加インストールは不要です（**外部ライ�
 
 ### 2. 通知先を用意する
 
-**Discord（一番かんたん）**
-サーバー設定 → 連携サービス → ウェブフック → 新しいウェブフック → URLをコピー。
-スマホの Discord アプリが即プッシュしてくれます。
+**既定はメール通知です。** 追加のアプリを入れなくても、スマホのメールアプリが
+そのまま知らせてくれます。
 
-**Telegram**
-BotFather でボットを作ってトークンを取得し、そのボットに一度話しかけてから
-`https://api.telegram.org/bot<トークン>/getUpdates` で `chat_id` を調べます。
+#### メール（既定）
 
-**メール**
-Gmail なら2段階認証を有効にしてアプリパスワードを発行し、それを使います。
-キャリアメール宛にすれば、アプリを入れていなくても着信音で気づけます。
+Gmail の場合、**普段のログインパスワードでは送れません。** 2段階認証を有効にした
+うえで「アプリパスワード」を発行し、それを使います。
+
+1. Google アカウント → セキュリティ → **2段階認証プロセス**を有効にする
+2. 同じ画面の **アプリ パスワード** から、16桁のパスワードを発行する
+   （直接開く場合は <https://myaccount.google.com/apppasswords>）
+3. 発行された16桁を控える（スペースは入れても入れなくても構いません）
+
+必要な設定は2つだけです。
+
+| 環境変数 | 中身 |
+|---|---|
+| `SMTP_USERNAME` | 送信に使う Gmail アドレス |
+| `SMTP_PASSWORD` | 上で発行した16桁のアプリパスワード |
+
+`ALERT_EMAIL_TO`（宛先）は**省略できます。** 省略すると `SMTP_USERNAME` と同じ
+アドレス、つまり自分宛に届きます。別のアドレス（キャリアメールなど）で
+受け取りたいときだけ設定してください。
+
+Gmail 以外を使う場合は `config.json` の `host` と `port` を変えます。
+
+| 送信元 | host | port |
+|---|---|---|
+| Gmail | `smtp.gmail.com` | `587` |
+| Outlook / Hotmail | `smtp-mail.outlook.com` | `587` |
+| Yahoo!メール | `smtp.mail.yahoo.co.jp` | `465` |
+
+`port` に `465` を指定すると SSL 接続、それ以外は STARTTLS で接続します。
+
+#### 別の通知先に変えたい場合
+
+`config.json` の `notifiers` で、使いたいものの `enabled` を消すか `true` にし、
+使わないものに `"enabled": false` を付けます。複数を同時に有効にもできます。
+
+- **Discord** … サーバー設定 → 連携サービス → ウェブフック → 新しいウェブフック → URLをコピー。プッシュが速いのが利点です
+- **Slack** … Incoming Webhook の URL を `webhook_url` に入れます
+- **Telegram** … BotFather でボットを作り、そのボットに一度話しかけてから `https://api.telegram.org/bot<トークン>/getUpdates` で `chat_id` を調べます
+- **webhook** … 任意の URL に JSON を POST します。LINE Messaging API の自作サーバーなどに流したいとき用です
 
 > LINE Notify は2025年3月末で終了しているため、対応していません。
-> LINE に流したい場合は `webhook` タイプで LINE Messaging API の
-> 自作サーバーに投げてください。
 
 ### 3. GitHub Actions で自動実行する
 
 このリポジトリの `.github/workflows/flight-alert.yml` が30分おきに実行します。
 リポジトリの Settings → Secrets and variables → Actions に、使うものだけ登録します。
 
-| Secret 名 | 用途 |
-|---|---|
-| `TRAVELPAYOUTS_TOKEN` | 価格取得（必須） |
-| `DISCORD_WEBHOOK_URL` | Discord 通知 |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram 通知 |
-| `SMTP_USERNAME` / `SMTP_PASSWORD` / `ALERT_EMAIL_TO` | メール通知 |
+| Secret 名 | 用途 | |
+|---|---|---|
+| `TRAVELPAYOUTS_TOKEN` | 価格取得 | **必須** |
+| `SMTP_USERNAME` | 送信に使うメールアドレス | **必須**（既定のメール通知） |
+| `SMTP_PASSWORD` | アプリパスワード | **必須**（既定のメール通知） |
+| `ALERT_EMAIL_TO` | 宛先を自分以外にしたいとき | 任意 |
+| `DISCORD_WEBHOOK_URL` | Discord 通知に切り替えるとき | 任意 |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram 通知に切り替えるとき | 任意 |
 
 `config.json` には `"${TRAVELPAYOUTS_TOKEN}"` のような**環境変数の参照しか書きません**。
 秘密が入らないので、そのままコミットして構いません。
@@ -141,11 +175,20 @@ Gmail なら2段階認証を有効にしてアプリパスワードを発行し�
 
 ```bash
 export TRAVELPAYOUTS_TOKEN=...
-export DISCORD_WEBHOOK_URL=...
+export SMTP_USERNAME=あなたのアドレス@gmail.com
+export SMTP_PASSWORD=16桁のアプリパスワード
 
-python -m bugfare test-notify -c config.json   # 通知先にテスト1通を送る
+python -m bugfare test-notify -c config.json      # 通知先にテスト1通を送る
 python -m bugfare scan -c config.json --dry-run   # 実データを取るが通知はしない
 ```
+
+`test-notify` を実行して受信箱に
+**「[バグ価格] HND→LAX ¥30,000」** のような件名のメールが届けば、配線は完了です。
+届かない場合は迷惑メールフォルダを確認してください。
+
+GitHub Actions 上で試すときは、Actions タブから
+**「バグ価格チェック」→ Run workflow** で手動実行できます。送信に失敗した場合は
+その実行が赤いバツで終わり、ログに理由が出ます（黙って止まることはありません）。
 
 ---
 
