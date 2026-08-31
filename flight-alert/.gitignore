@@ -1,0 +1,6 @@
+# config.json は "${ENV}" 参照しか持たないのでコミットしてよい（GitHub Actions で必要）
+data/
+*.sqlite3
+__pycache__/
+*.pyc
+.venv/

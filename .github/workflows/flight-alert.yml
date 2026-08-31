@@ -1,0 +1,60 @@
+name: バグ価格チェック
+
+# 30分おきに羽田・成田発の価格を見に行く。
+# GitHub の cron は混み具合で数分〜十数分遅れることがある。分刻みの
+# 正確さが要るなら、手元のマシンや VPS の cron で回したほうが確実。
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:      # 「Run workflow」ボタンで手動実行もできる
+
+concurrency:
+  group: flight-alert
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flight-alert
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 価格履歴（SQLite）を実行間で持ち越す。
+      # これが無いと毎回「相場を知らない状態」になり、絶対額ルールしか働かない。
+      - name: 価格履歴を復元
+        uses: actions/cache@v4
+        with:
+          path: flight-alert/data
+          key: bugfare-db-${{ github.run_id }}
+          restore-keys: |
+            bugfare-db-
+
+      - name: テスト
+        run: python -m unittest discover -s tests -t .
+
+      # config.json が無ければ雛形をそのまま使う。中身は "${ENV}" 参照だけなので
+      # 秘密は入っていない。設定を変えたいときは config.json をコミットする。
+      - name: 設定ファイルを用意
+        run: test -f config.json || cp config.example.json config.json
+
+      - name: 価格をチェックして通知
+        env:
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        run: python -m bugfare scan -c config.json
+
+      - name: 古い履歴を捨てる
+        if: always()
+        run: python -m bugfare prune -c config.json --keep-days 180
