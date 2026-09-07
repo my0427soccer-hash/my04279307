@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>羽田・成田発 格安航空券メモ</title>
+<meta name="description" content="羽田・成田発の航空券の相場を毎日記録し、普段より極端に安い運賃が出たときに気づくための覚え書き。">
+
+<!-- ============================================================
+     Travelpayouts Drive
+     ------------------------------------------------------------
+     Travelpayouts の管理画面「Install Drive manually」に表示された
+     スクリプト。画面から書き写したものなので、管理画面のコピーボタンで
+     取得した内容と一致するか必ず確認し、違っていればこのブロックごと
+     置き換えること。
+
+     このスクリプトはこのページにだけ置いている。相互評価レーダー本体
+     （リポジトリ直下の index.html）には設置していない。
+     ============================================================ -->
+<script nowprocket data-noptimize="1" data-cfasync="false" data-wpfc-render="false" seraph-accel-crit="1" data-no-defer="1" data-cmp-ab="2">
+  (function () {
+      var script = document.createElement("script");
+      script.async = 1;
+      script.setAttribute("data-cmp-ab","2");
+      script.src = 'https://tpembars.com/NTY4ODY2.js?t=568866';
+      document.head.appendChild(script);
+  })();
+</script>
+
+<style>
+/* ============================================================
+   Tokens
+   ------------------------------------------------------------
+   本体アプリ（相互評価レーダー）と同じ考え方で、ニュートラルは
+   灰色ではなくわずかに青緑へ振ったインク色。アクセントは空の青。
+   ============================================================ */
+:root {
+  --bg: #f5f7f7;
+  --surface: #ffffff;
+  --ink: #17242a;
+  --ink-soft: #55686f;
+  --line: #dbe3e5;
+  --accent: #1668b8;
+  --accent-soft: #e8f1fa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1214;
+    --surface: #151d20;
+    --ink: #e8eeef;
+    --ink-soft: #94a5ab;
+    --line: #253135;
+    --accent: #6aa9e0;
+    --accent-soft: #16242f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 20px 64px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  line-height: 1.8;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 680px; margin: 0 auto; }
+
+header { padding: 56px 0 8px; }
+
+h1 {
+  font-size: clamp(1.5rem, 5vw, 2rem);
+  line-height: 1.35;
+  margin: 0 0 12px;
+  letter-spacing: .01em;
+}
+
+.lede { color: var(--ink-soft); margin: 0; }
+
+h2 {
+  font-size: 1.15rem;
+  margin: 44px 0 4px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+p { margin: 12px 0; }
+
+ul { padding-left: 1.2em; }
+li { margin: 6px 0; }
+
+/* 路線カード。タップ領域を広く取って、スマホからも押しやすくする */
+.routes {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.routes a {
+  display: block;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.routes a:hover { border-color: var(--accent); }
+.routes .to { display: block; font-weight: 600; }
+.routes .from { display: block; font-size: .82rem; color: var(--ink-soft); }
+
+.note {
+  background: var(--accent-soft);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin: 20px 0;
+}
+.note p { margin: 0; }
+
+a { color: var(--accent); }
+
+footer {
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: .84rem;
+  color: var(--ink-soft);
+}
+footer p { margin: 8px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>羽田・成田発<br>格安航空券メモ</h1>
+  <p class="lede">
+    東京発の航空券の値段を毎日記録して、普段の相場から大きく外れた安値が出たときに
+    気づくための個人的な覚え書きです。
+  </p>
+</header>
+
+<h2>なぜ相場を記録するのか</h2>
+
+<p>
+  航空券には、ごくまれに桁を間違えたような値段が出ることがあります。
+  羽田発ロサンゼルス往復が4万円台、といった水準です。多くは運賃の設定ミスや
+  為替換算の不具合が原因で、<strong>数十分から数時間で消えます</strong>。
+</p>
+
+<p>
+  こうした値段は「安いかどうか」を感覚で判断すると見逃します。
+  普段いくらなのかを知らなければ、5万円が安いのか高いのか分からないからです。
+  そこで日々の最安値を残し、<strong>相場の半額以下になった瞬間</strong>だけを
+  拾えるようにしています。
+</p>
+
+<h2>よく見ている路線</h2>
+
+<p>いずれも Skyscanner の検索結果が開きます。月単位のカレンダーで最安日を探せます。</p>
+
+<ul class="routes">
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/lax/"><span class="to">ロサンゼルス</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/sfo/"><span class="to">サンフランシスコ</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/jfk/"><span class="to">ニューヨーク</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/hnl/"><span class="to">ホノルル</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/lhr/"><span class="to">ロンドン</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/nrt/cdg/"><span class="to">パリ</span><span class="from">成田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/nrt/hel/"><span class="to">ヘルシンキ</span><span class="from">成田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/sin/"><span class="to">シンガポール</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/bkk/"><span class="to">バンコク</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/nrt/dps/"><span class="to">バリ（デンパサール）</span><span class="from">成田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/tpe/"><span class="to">台北</span><span class="from">羽田発</span></a></li>
+  <li><a href="https://www.skyscanner.jp/transport/flights/hnd/icn/"><span class="to">ソウル</span><span class="from">羽田発</span></a></li>
+</ul>
+
+<h2>安値を見つけたときの実務</h2>
+
+<p>
+  設定ミスによる運賃は、確保できても後から取り消されることがあります。
+  次の順で動くのが安全です。
+</p>
+
+<ul>
+  <li><strong>すぐ買う。</strong>比較や相談をしている間に消えます</li>
+  <li><strong>発券まで確認する。</strong>予約番号だけでは確定ではありません。
+      eチケット番号が出て初めて発券済みです</li>
+  <li><strong>しばらく他の予約を確定させない。</strong>取り消しの連絡は発券から
+      数日以内に来ることが多いので、ホテルや現地の手配はそれを待ってから</li>
+  <li><strong>予約内容を触らない。</strong>日程変更や座席指定で運賃が再計算され、
+      差額を請求されることがあります</li>
+</ul>
+
+<div class="note">
+  <p>
+    表示価格には遅れがあります。ここから飛んだ先で値段が違っていれば、
+    その運賃は既に終わっています。粘らず次を待つほうが結果的に得です。
+  </p>
+</div>
+
+<h2>この記録の取り方</h2>
+
+<p>
+  価格の取得から通知までは自作のツールで自動化しています。1日に複数回、
+  羽田・成田発の各路線・各月の最安値を取得して保存し、
+  中央値から大きく下振れした運賃が出たときだけメールが届く仕組みです。
+  ソースコードは
+  <a href="https://github.com/my0427soccer-hash/my04279307/tree/claude/personality-radar-chart-tool-7d9zwx/flight-alert">GitHub</a>
+  に置いています。
+</p>
+
+<footer>
+  <p>
+    このページは Travelpayouts のアフィリエイトプログラムに参加しており、
+    価格比較のためのスクリプトを読み込んでいます。リンク経由で予約が成立した場合、
+    運営者に手数料が支払われることがあります。価格やおすすめ先が
+    その影響で変わることはありません。
+  </p>
+  <p>
+    なお、同じドメインで公開している「相互評価レーダー」には、
+    このスクリプトを含む第三者サービスを一切組み込んでいません。
+    そちらの扱いは
+    <a href="../PRIVACY.md">プライバシーポリシー</a>のとおりです。
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
