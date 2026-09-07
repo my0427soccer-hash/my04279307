@@ -1,5 +1,10 @@
 """Amadeus Self-Service API から価格を取る。
 
+⚠️ 個人向けの Self-Service ポータルは 2026年7月17日に廃止された。
+新規登録は停止され、既存のキーも無効化されている。Amadeus Enterprise の
+契約がある場合を除き、この取得元は新たに使い始めることができない。
+実装は、既存の契約者と将来の参考のために残してある。
+
 実在する予約可能な運賃を返すので Travelpayouts より正確だが、
 1リクエストで1つの日付しか調べられない。そのため各月から代表日
 （provider.sample_days）を選び、provider.stay_nights 泊の往復として問い合わせる。
