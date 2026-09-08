@@ -5,7 +5,7 @@
     "token": "${TRAVELPAYOUTS_TOKEN}",
     "market": "jp",
     "request_pause_seconds": 0.4,
-    "max_requests": 400
+    "max_requests": 700
   },
   "search": {
     "origins": [

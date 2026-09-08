@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+from unittest import mock
 
 from bugfare.providers.travelpayouts import TravelpayoutsProvider, _parse_date
 
@@ -70,3 +71,50 @@ class ToOfferTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RequestBudgetTest(unittest.TestCase):
+    """リクエスト上限で打ち切られたときの挙動。"""
+
+    def provider(self, max_requests: int):
+        cfg = make_config(
+            provider={"name": "travelpayouts", "token": "dummy", "max_requests": max_requests,
+                      "request_pause_seconds": 0},
+            search={"origins": ["HND", "NRT"], "months_ahead": 2, "trip_types": ["round"]},
+        )
+        return TravelpayoutsProvider(cfg)
+
+    def test_required_requests_counts_every_combination(self):
+        # 出発地2 × 行き先3（LAX/SFO/ICN）× 2か月 × 往復のみ
+        self.assertEqual(self.provider(999).required_requests(), 12)
+
+    def test_both_origins_are_covered_when_the_budget_runs_out(self):
+        """上限で切れても、羽田だけ見て成田が丸ごと抜けることがあってはならない。"""
+        provider = self.provider(6)
+        asked: list[tuple[str, str]] = []
+
+        def record(origin, destination, month, trip_type):
+            asked.append((origin, destination))
+            return []
+
+        with mock.patch.object(provider, "_fetch", side_effect=record):
+            list(provider.search())
+
+        self.assertEqual(len(asked), 6)
+        origins = {origin for origin, _ in asked}
+        self.assertEqual(origins, {"HND", "NRT"})
+
+    def test_nothing_is_skipped_when_the_budget_is_enough(self):
+        provider = self.provider(999)
+        asked = []
+
+        def record(origin, destination, month, trip_type):
+            asked.append((origin, destination))
+            return []
+
+        with mock.patch.object(provider, "_fetch", side_effect=record):
+            list(provider.search())
+
+        self.assertEqual(len(asked), provider.required_requests())
+        self.assertEqual({o for o, _ in asked}, {"HND", "NRT"})
+        self.assertEqual({d for _, d in asked}, {"LAX", "SFO", "ICN"})

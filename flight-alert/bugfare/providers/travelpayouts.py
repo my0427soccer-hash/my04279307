@@ -41,15 +41,20 @@ class TravelpayoutsProvider(Provider):
         floor = self.earliest_departure()
         requests_made = 0
 
-        for origin in search.origins:
-            for destination in self.destinations():
-                for month in self.months():
-                    for trip_type in search.trip_types:
+        # 出発地をいちばん内側で回す。上限で打ち切られたときに、
+        # 先頭の出発地だけを調べ終えて残りが丸ごと抜ける、という偏りを避ける。
+        # （羽田を全部見たところで力尽きて成田を見ない、という状態にしない）
+        for destination in self.destinations():
+            for month in self.months():
+                for trip_type in search.trip_types:
+                    for origin in search.origins:
                         if requests_made >= cfg.max_requests:
                             log.warning(
                                 "リクエスト上限 %d 件に達したので打ち切ります。"
+                                "全部を見るには provider.max_requests を %d 以上にするか、"
                                 "search.months_ahead か行き先を減らしてください。",
                                 cfg.max_requests,
+                                self.required_requests(),
                             )
                             return
                         requests_made += 1
