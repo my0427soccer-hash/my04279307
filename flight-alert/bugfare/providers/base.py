@@ -54,6 +54,19 @@ class Provider(ABC):
     def earliest_departure(self) -> date:
         return date.today() + timedelta(days=self.config.search.min_days_ahead)
 
+    def required_requests(self) -> int:
+        """設定を全部調べきるのに必要なリクエスト数。
+
+        provider.max_requests がこれを下回ると、調べきれずに打ち切られる。
+        """
+        search = self.config.search
+        return (
+            len(search.origins)
+            * len(self.destinations())
+            * len(self.months())
+            * len(search.trip_types)
+        )
+
     def sample_dates(self, month: date) -> list[date]:
         """日付を総当たりできないプロバイダ向けに、月内の代表日を選ぶ。"""
         last_day = calendar.monthrange(month.year, month.month)[1]
