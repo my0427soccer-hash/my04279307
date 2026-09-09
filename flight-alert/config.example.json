@@ -5,7 +5,7 @@
     "token": "${TRAVELPAYOUTS_TOKEN}",
     "market": "jp",
     "request_pause_seconds": 0.4,
-    "max_requests": 700
+    "max_requests": 1100
   },
   "search": {
     "origins": [
@@ -51,18 +51,41 @@
       "oneway_alert_price": 35000
     },
     {
-      "name": "東南アジア・オセアニア",
+      "name": "東南アジア",
       "destinations": [
         "BKK",
+        "DMK",
+        "HKT",
+        "CNX",
         "SIN",
         "KUL",
+        "PEN",
+        "BKI",
         "DPS",
+        "CGK",
         "SGN",
+        "HAN",
+        "DAD",
         "MNL",
-        "SYD"
+        "CEB",
+        "PNH",
+        "SAI",
+        "RGN",
+        "VTE"
       ],
       "alert_price": 30000,
       "oneway_alert_price": 18000
+    },
+    {
+      "name": "オセアニア",
+      "destinations": [
+        "SYD",
+        "MEL",
+        "BNE",
+        "AKL"
+      ],
+      "alert_price": 45000,
+      "oneway_alert_price": 25000
     },
     {
       "name": "東アジア",
