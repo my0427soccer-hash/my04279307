@@ -36,17 +36,29 @@ class EmailNotifier(Notifier):
         addresses = [str(a).strip() for a in raw if str(a).strip()]
         return addresses or [username]
 
+    @staticmethod
+    def ordered(alerts: Sequence[Alert]) -> list[Alert]:
+        """本文に並べる順。バグらしさ（相場からの外れ具合）が大きいものを先頭にする。"""
+        return sorted(alerts, key=lambda a: a.score, reverse=True)
+
     def build_message(self, alerts: Sequence[Alert], username: str) -> EmailMessage:
-        cheapest = min(alerts, key=lambda a: a.offer.price_jpy).offer
-        subject = f"[バグ価格] {cheapest.origin}→{cheapest.destination} ¥{cheapest.price_jpy:,}"
-        if len(alerts) > 1:
-            subject += f" 他{len(alerts) - 1}件"
+        # 件名は必ず本文の1件目と同じ便を指す。
+        # 以前は件名だけ「いちばん安い便」を選んでいたため、本文の先頭
+        # （いちばんバグらしい便）と食い違うことがあった。安さの順と
+        # 外れ具合の順は一致しない（例: 相場6万円に対する3.2万円は、
+        # 相場3万円に対する1.7万円より高いが、より大きく外れている）。
+        ordered = self.ordered(alerts)
+        lead = ordered[0].offer
+
+        subject = f"[バグ価格] {lead.origin}→{lead.destination} ¥{lead.price_jpy:,}"
+        if len(ordered) > 1:
+            subject += f" 他{len(ordered) - 1}件"
 
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = self.settings.get("from") or username
         message["To"] = ", ".join(self.recipients(username))
-        message.set_content(plain_text(alerts, self.alerting))
+        message.set_content(plain_text(ordered, self.alerting))
         return message
 
     def send(self, alerts: Sequence[Alert]) -> None:
