@@ -22,8 +22,13 @@ class DiscordNotifier(Notifier):
         if not alerts:
             return
         url = self.require("webhook_url")
+        # Discord が1通で表示できるのは MAX_EMBEDS 件まで。バグらしさの
+        # 大きい順に残す。
+        ordered = sorted(alerts, key=lambda a: a.score, reverse=True)
+        shown = ordered[:MAX_EMBEDS]
+
         embeds = []
-        for alert in alerts[:MAX_EMBEDS]:
+        for alert in shown:
             embeds.append(
                 {
                     "title": "🚨 " + alert_title(alert),
@@ -32,9 +37,16 @@ class DiscordNotifier(Notifier):
                     "color": 0xE03131 if alert.score >= 0.6 else 0xF08C00,
                 }
             )
+
+        # 見出しの件数は必ず「実際に並んでいる件数」と合わせる。
+        # 全件の数を名乗ると、表示されていない便まで数に入って食い違う。
+        content = f"羽田・成田発で安値を {len(shown)} 件見つけました"
+        if len(ordered) > len(shown):
+            content += f"（ほかに {len(ordered) - len(shown)} 件あります）"
+
         payload = {
             "username": self.settings.get("username", "バグ価格アラート"),
-            "content": f"羽田・成田発で安値を {len(alerts)} 件見つけました",
+            "content": content,
             "embeds": embeds,
         }
         request_json(url, method="POST", json_body=payload)

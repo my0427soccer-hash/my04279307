@@ -7,7 +7,7 @@ from bugfare.notifiers.email_smtp import EmailNotifier
 from .helpers import make_config, make_offer
 
 
-def make_alert(price: int, destination: str = "LAX") -> Alert:
+def make_alert(price: int, destination: str = "LAX", score: float = 0.66) -> Alert:
     offer = make_offer(price, destination=destination)
     return Alert(
         offer=offer,
@@ -15,7 +15,7 @@ def make_alert(price: int, destination: str = "LAX") -> Alert:
         messages=["通知ラインを下回りました"],
         baseline=Baseline(offer.route_key, 20, price * 3, price * 2, 5000.0),
         discount=0.66,
-        score=0.66,
+        score=score,
     )
 
 
@@ -57,9 +57,58 @@ class EmailNotifierTest(unittest.TestCase):
         self.assertEqual(message["Subject"], "[バグ価格] HND→LAX ¥39,800")
 
     def test_subject_counts_the_rest(self):
-        alerts = [make_alert(39_800), make_alert(12_000, "ICN"), make_alert(50_000, "SFO")]
+        alerts = [
+            make_alert(39_800, score=0.5),
+            make_alert(12_000, "ICN", score=0.9),
+            make_alert(50_000, "SFO", score=0.4),
+        ]
         message = self.notifier().build_message(alerts, "me@example.com")
         self.assertEqual(message["Subject"], "[バグ価格] HND→ICN ¥12,000 他2件")
+
+    # ------------------------------------------------- 件名と本文の食い違い
+
+    def lead_lines(self, message) -> list[str]:
+        return [
+            line.removeprefix("🚨 ")
+            for line in message.get_content().splitlines()
+            if line.startswith("🚨")
+        ]
+
+    def test_subject_names_the_flight_the_body_leads_with(self):
+        """件名が最安の便、本文の先頭が別の便、という食い違いを防ぐ。
+
+        実際に届いたメールで起きた組み合わせ。相場6万円に対する3.2万円は、
+        相場3万円に対する1.7万円より「高い」が、より大きく外れているため
+        本文では先に並ぶ。件名だけ最安を選ぶと両者がずれる。
+        """
+        alerts = [
+            make_alert(32_755, "HNL", score=0.4541),
+            make_alert(17_132, "SIN", score=0.4289),
+        ]
+        message = self.notifier().build_message(alerts, "me@example.com")
+
+        self.assertEqual(message["Subject"], "[バグ価格] HND→HNL ¥32,755 他1件")
+        self.assertEqual(self.lead_lines(message)[0], "HND→HNL 往復 ¥32,755")
+
+    def test_subject_and_body_agree_whatever_order_they_arrive_in(self):
+        cheap_but_ordinary = make_alert(17_132, "SIN", score=0.4289)
+        pricey_but_extreme = make_alert(32_755, "HNL", score=0.4541)
+
+        for alerts in ([pricey_but_extreme, cheap_but_ordinary],
+                       [cheap_but_ordinary, pricey_but_extreme]):
+            message = self.notifier().build_message(alerts, "me@example.com")
+            first = self.lead_lines(message)[0]
+            self.assertIn("HNL", message["Subject"])
+            self.assertIn("¥32,755", message["Subject"])
+            self.assertTrue(
+                first.startswith("HND→HNL"),
+                f"本文の先頭が件名と違う: {first}",
+            )
+
+    def test_single_alert_subject_has_no_count(self):
+        message = self.notifier().build_message([make_alert(39_800)], "me@example.com")
+        self.assertEqual(message["Subject"], "[バグ価格] HND→LAX ¥39,800")
+        self.assertEqual(len(self.lead_lines(message)), 1)
 
     def test_body_carries_the_skyscanner_link(self):
         message = self.notifier().build_message([make_alert(39_800)], "me@example.com")
